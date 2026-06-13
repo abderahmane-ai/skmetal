@@ -4,21 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skmetal"
-version = "0.1.0"
-description = "Apple Silicon GPU acceleration for scikit-learn"
+version = "0.2.0"
+description = "GPU-accelerated scikit-learn via Apple Metal"
 readme = "README.md"
 authors = [
     {name = "Ainouche Abderahmane"},
 ]
-requires-python = ">=3.9"
-license = {text = "MIT"}
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["scikit-learn", "metal", "gpu", "apple-silicon", "machine-learning"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS :: MacOS X",
-    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Swift",
+    "Programming Language :: Metal",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
@@ -35,6 +39,26 @@ dev = [
     "pandas>=2.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/abderahmane-ai/skmetal"
+Repository = "https://github.com/abderahmane-ai/skmetal"
+"Bug Tracker" = "https://github.com/abderahmane-ai/skmetal/issues"
+
 [tool.setuptools.packages.find]
 where = ["."]
 namespaces = false
+
+[tool.setuptools.package-data]
+skmetal = ["*.dylib", "SkMetalBridge_SkMetalBridge.bundle/**/*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["skmetal_bridge"]
+lint.select = ["E", "F", "W", "I", "N", "UP"]
+lint.ignore = ["E501", "E402", "N812"]
+
+[tool.pytest.ini_options]
+testpaths = ["../tests"]
+python_files = ["test_*.py"]
+timeout = 120

@@ -1,19 +1,10 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["skmetal/skmetal_bridge"]
+lint.select = ["E", "F", "W", "I", "N", "UP"]
+lint.ignore = ["E501", "E402", "N812"]
 
-[project]
-name = "skmetal"
-version = "0.1.0"
-description = "GPU-accelerated scikit-learn via Apple Metal"
-readme = "README.md"
-license = {text = "MIT"}
-requires-python = ">=3.10"
-dependencies = [
-    "numpy",
-    "scipy",
-    "scikit-learn>=1.4",
-]
-
-[tool.setuptools.packages.find]
-include = ["skmetal*"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

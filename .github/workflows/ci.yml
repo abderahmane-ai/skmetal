@@ -20,10 +20,27 @@ jobs:
     - name: Check Swift availability
       run: swift --version
 
+    - name: Compile Metal kernels
+      run: |
+        cd skmetal/skmetal_bridge
+        bash compile_metal.sh
+
     - name: Build Swift Bridge
       run: |
         cd skmetal/skmetal_bridge
         swift build --configuration release
+
+    - name: Copy artifacts into Python package
+      run: |
+        DYLIB="skmetal/skmetal_bridge/.build/arm64-apple-macosx/release/libSkMetalBridge.dylib"
+        if [ ! -f "$DYLIB" ]; then
+          DYLIB="skmetal/skmetal_bridge/.build/release/libSkMetalBridge.dylib"
+        fi
+        cp "$DYLIB" skmetal/skmetal/libSkMetalBridge.dylib
+        BUNDLE="skmetal/skmetal_bridge/.build/arm64-apple-macosx/release/SkMetalBridge_SkMetalBridge.bundle"
+        if [ -d "$BUNDLE" ]; then
+          cp -R "$BUNDLE" skmetal/skmetal/SkMetalBridge_SkMetalBridge.bundle
+        fi
 
     - name: Install Python package
       run: |
