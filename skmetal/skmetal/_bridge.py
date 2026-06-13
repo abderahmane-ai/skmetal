@@ -320,6 +320,97 @@ _lib.skmetal_scale_rows.argtypes = [
 ]
 _lib.skmetal_scale_rows.restype = ctypes.c_int
 
+_lib.skmetal_knn_select_from_gemm.argtypes = [
+    ctypes.c_void_p,  # raw_dot (X @ X_train^T from MPS GEMM)
+    ctypes.c_void_p,  # r_query
+    ctypes.c_void_p,  # r_train
+    ctypes.c_void_p,  # out_indices
+    ctypes.c_void_p,  # out_values
+    ctypes.c_size_t,  # n_q
+    ctypes.c_size_t,  # n_t
+    ctypes.c_size_t,  # k
+]
+_lib.skmetal_knn_select_from_gemm.restype = ctypes.c_int
+
+_lib.skmetal_knn_vote_classify.argtypes = [
+    ctypes.c_void_p,  # indices
+    ctypes.c_void_p,  # train_labels
+    ctypes.c_void_p,  # predictions
+    ctypes.c_size_t,  # N
+    ctypes.c_size_t,  # k
+    ctypes.c_size_t,  # n_train
+]
+_lib.skmetal_knn_vote_classify.restype = ctypes.c_int
+
+_lib.skmetal_knn_vote_regress.argtypes = [
+    ctypes.c_void_p,  # indices
+    ctypes.c_void_p,  # train_targets
+    ctypes.c_void_p,  # predictions
+    ctypes.c_size_t,  # N
+    ctypes.c_size_t,  # k
+    ctypes.c_size_t,  # n_train
+]
+_lib.skmetal_knn_vote_regress.restype = ctypes.c_int
+
+_lib.skmetal_knn_tiled_kneighbors.argtypes = [
+    ctypes.c_void_p,  # X_query
+    ctypes.c_void_p,  # X_train
+    ctypes.c_void_p,  # out_indices
+    ctypes.c_void_p,  # out_values
+    ctypes.c_size_t,  # n_q
+    ctypes.c_size_t,  # n_t
+    ctypes.c_size_t,  # d
+    ctypes.c_size_t,  # k
+    ctypes.c_size_t,  # tile_size
+]
+_lib.skmetal_knn_tiled_kneighbors.restype = ctypes.c_int
+
+_lib.skmetal_soft_threshold.argtypes = [
+    ctypes.c_void_p,  # w (in/out)
+    ctypes.c_void_p,  # w_temp
+    ctypes.c_float,   # threshold
+    ctypes.c_size_t,  # n
+]
+_lib.skmetal_soft_threshold.restype = ctypes.c_int
+
+_lib.skmetal_column_transform.argtypes = [
+    ctypes.c_void_p,  # input
+    ctypes.c_void_p,  # output
+    ctypes.c_void_p,  # center
+    ctypes.c_void_p,  # scale
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # d
+]
+_lib.skmetal_column_transform.restype = ctypes.c_int
+
+_lib.skmetal_transpose_f32.argtypes = [
+    ctypes.c_void_p,  # input
+    ctypes.c_void_p,  # output
+    ctypes.c_size_t,  # rows
+    ctypes.c_size_t,  # cols
+]
+_lib.skmetal_transpose_f32.restype = ctypes.c_int
+
+_lib.skmetal_sv_init.argtypes = [
+    ctypes.c_void_p,  # parent
+    ctypes.c_size_t,  # n
+]
+_lib.skmetal_sv_init.restype = ctypes.c_int
+
+_lib.skmetal_sv_hook.argtypes = [
+    ctypes.c_void_p,  # edges
+    ctypes.c_void_p,  # parent
+    ctypes.c_size_t,  # edge_count
+    ctypes.c_size_t,  # n
+]
+_lib.skmetal_sv_hook.restype = ctypes.c_int
+
+_lib.skmetal_sv_shortcut.argtypes = [
+    ctypes.c_void_p,  # parent
+    ctypes.c_size_t,  # n
+]
+_lib.skmetal_sv_shortcut.restype = ctypes.c_int
+
 # Initialize on import
 _lib.skmetal_init()
 
@@ -705,6 +796,137 @@ def device_info() -> dict:
         "name": name_ptr.value.decode("utf-8") if name_ptr.value else "unknown",
         "max_threads_per_threadgroup": max_threads.value,
     }
+
+
+def knn_select_from_gemm(raw_dot: np.ndarray, r_query: np.ndarray,
+                          r_train: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """GPU: select k-nearest neighbors from GEMM dot matrix + expansion trick.
+    
+    Fuses distance_correct + k-select into one kernel (reads GEMM output coalesced).
+    Returns (squared_distances, indices).
+    """
+    n_q, n_t = raw_dot.shape
+    out_indices = np.empty((n_q, k), dtype=np.int32, order="C")
+    out_values = np.empty((n_q, k), dtype=np.float32, order="C")
+    err = _lib.skmetal_knn_select_from_gemm(
+        raw_dot.ctypes.data, r_query.ctypes.data, r_train.ctypes.data,
+        out_indices.ctypes.data, out_values.ctypes.data,
+        ctypes.c_size_t(n_q), ctypes.c_size_t(n_t),
+        ctypes.c_size_t(k),
+    )
+    if err != 0:
+        raise RuntimeError(f"knn_select_from_gemm failed with code {err}")
+    return out_values, out_indices
+
+
+def knn_vote_classify(indices: np.ndarray, train_labels: np.ndarray,
+                       predictions: np.ndarray, N: int, k: int, n_train: int) -> None:
+    """GPU: majority-vote classification from k-nearest neighbor indices."""
+    err = _lib.skmetal_knn_vote_classify(
+        indices.ctypes.data, train_labels.ctypes.data, predictions.ctypes.data,
+        ctypes.c_size_t(N), ctypes.c_size_t(k), ctypes.c_size_t(n_train),
+    )
+    if err != 0:
+        raise RuntimeError(f"knn_vote_classify failed with code {err}")
+
+
+def knn_vote_regress(indices: np.ndarray, train_targets: np.ndarray,
+                      predictions: np.ndarray, N: int, k: int, n_train: int) -> None:
+    """GPU: mean regression from k-nearest neighbor indices."""
+    err = _lib.skmetal_knn_vote_regress(
+        indices.ctypes.data, train_targets.ctypes.data, predictions.ctypes.data,
+        ctypes.c_size_t(N), ctypes.c_size_t(k), ctypes.c_size_t(n_train),
+    )
+    if err != 0:
+        raise RuntimeError(f"knn_vote_regress failed with code {err}")
+
+
+def knn_tiled_kneighbors(X_query: np.ndarray, X_train: np.ndarray, k: int, tile_size: int = 4096) -> tuple[np.ndarray, np.ndarray]:
+    """GPU tiled k-nearest neighbors search.
+
+    Processes training data in tiles to avoid materializing the full N×M
+    distance matrix. Each tile: GEMM → k-select → merge into global top-k.
+
+    Returns (squared_distances, indices).
+    """
+    n_q, d = X_query.shape
+    n_t, _ = X_train.shape
+    out_indices = np.empty((n_q, k), dtype=np.int32, order="C")
+    out_values = np.empty((n_q, k), dtype=np.float32, order="C")
+    err = _lib.skmetal_knn_tiled_kneighbors(
+        X_query.ctypes.data, X_train.ctypes.data,
+        out_indices.ctypes.data, out_values.ctypes.data,
+        ctypes.c_size_t(n_q), ctypes.c_size_t(n_t),
+        ctypes.c_size_t(d), ctypes.c_size_t(k),
+        ctypes.c_size_t(tile_size),
+    )
+    if err != 0:
+        raise RuntimeError(f"knn_tiled_kneighbors failed with code {err}")
+    return out_values, out_indices
+
+
+def soft_threshold(w: np.ndarray, w_temp: np.ndarray, threshold: float) -> None:
+    """GPU: soft-thresholding for Lasso (FISTA): w = sign(x) * max(|x| - t, 0)."""
+    n = w.size
+    err = _lib.skmetal_soft_threshold(
+        w.ctypes.data, w_temp.ctypes.data, ctypes.c_float(threshold), ctypes.c_size_t(n),
+    )
+    if err != 0:
+        raise RuntimeError(f"soft_threshold failed with code {err}")
+
+
+def column_transform(input: np.ndarray, output: np.ndarray,
+                      center: np.ndarray, scale: np.ndarray) -> None:
+    """GPU: output[i][j] = (input[i][j] - center[j]) * scale[j]."""
+    n, d = input.shape
+    err = _lib.skmetal_column_transform(
+        input.ctypes.data, output.ctypes.data,
+        center.ctypes.data, scale.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(d),
+    )
+    if err != 0:
+        raise RuntimeError(f"column_transform failed with code {err}")
+
+
+def transpose_f32(input: np.ndarray, output: np.ndarray) -> None:
+    """GPU: transpose f32 matrix (row-major ↔ column-major)."""
+    if input.dtype != np.float32 or output.dtype != np.float32:
+        raise TypeError("input and output must be float32")
+    rows, cols = input.shape
+    err = _lib.skmetal_transpose_f32(
+        input.ctypes.data, output.ctypes.data,
+        ctypes.c_size_t(rows), ctypes.c_size_t(cols),
+    )
+    if err != 0:
+        raise RuntimeError(f"transpose_f32 failed with code {err}")
+
+
+def sv_init(parent: np.ndarray) -> None:
+    """GPU: initialize SV parent array: parent[i] = i."""
+    n = parent.size
+    err = _lib.skmetal_sv_init(parent.ctypes.data, ctypes.c_size_t(n))
+    if err != 0:
+        raise RuntimeError(f"sv_init failed with code {err}")
+
+
+def sv_hook(edges: np.ndarray, parent: np.ndarray) -> None:
+    """GPU: one SV hook iteration on the edge list."""
+    edge_count = edges.size // 2
+    n = parent.size
+    err = _lib.skmetal_sv_hook(
+        edges.ctypes.data, parent.ctypes.data,
+        ctypes.c_size_t(edge_count), ctypes.c_size_t(n),
+    )
+    if err != 0:
+        raise RuntimeError(f"sv_hook failed with code {err}")
+
+
+def sv_shortcut(parent: np.ndarray) -> None:
+    """GPU: one SV shortcut iteration: parent[i] = parent[parent[i]]."""
+    n = parent.size
+    err = _lib.skmetal_sv_shortcut(parent.ctypes.data, ctypes.c_size_t(n))
+    if err != 0:
+        raise RuntimeError(f"sv_shortcut failed with code {err}")
 
 
 def warmup():

@@ -1,20 +1,30 @@
 """Estimator registry mapping sklearn classes to GPU implementations."""
 
-from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression
+from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression, Lasso, ElasticNet
 from sklearn.decomposition import PCA, TruncatedSVD
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.naive_bayes import GaussianNB
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor, NearestNeighbors
 
 # Mapping from sklearn class -> GPU implementation class name
 GPU_ESTIMATORS = {
     LinearRegression: "MetalLinearRegression",
     Ridge: "MetalRidge",
     LogisticRegression: "MetalLogisticRegression",
+    Lasso: "MetalLasso",
+    ElasticNet: "MetalElasticNet",
     PCA: "MetalPCA",
     TruncatedSVD: "MetalTruncatedSVD",
     KMeans: "MetalKMeans",
+    DBSCAN: "MetalDBSCAN",
+    GaussianNB: "MetalGaussianNB",
     StandardScaler: "MetalStandardScaler",
     MinMaxScaler: "MetalMinMaxScaler",
+    RobustScaler: "MetalRobustScaler",
+    KNeighborsClassifier: "MetalKNeighborsClassifier",
+    KNeighborsRegressor: "MetalKNeighborsRegressor",
+    NearestNeighbors: "MetalNearestNeighbors",
 }
 
 # Pipeline support: map by step name patterns
@@ -22,9 +32,17 @@ PIPELINE_PATTERNS = {
     "linearregression": LinearRegression,
     "ridge": Ridge,
     "logisticregression": LogisticRegression,
+    "lasso": Lasso,
+    "elasticnet": ElasticNet,
     "pca": PCA,
     "truncatedsvd": TruncatedSVD,
     "kmeans": KMeans,
+    "dbscan": DBSCAN,
+    "gaussiannb": GaussianNB,
     "standardscaler": StandardScaler,
     "minmaxscaler": MinMaxScaler,
+    "robustscaler": RobustScaler,
+    "kneighborsclassifier": KNeighborsClassifier,
+    "kneighborsregressor": KNeighborsRegressor,
+    "nearestneighbors": NearestNeighbors,
 }

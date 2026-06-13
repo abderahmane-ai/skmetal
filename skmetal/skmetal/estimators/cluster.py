@@ -6,6 +6,7 @@ from .._bridge import (
     kmeans_assign,
     kmeans_batch_fused,
     compute_mindists,
+    sv_init, sv_hook, sv_shortcut,
 )
 
 
@@ -76,3 +77,93 @@ class MetalKMeans(BaseGPUEstimator):
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_transform(X)
         return pairwise_distance(X)
+
+
+class MetalDBSCAN(BaseGPUEstimator):
+    def _gpu_sv_connected_components(self, core_indices, n_total, neighbor_mask):
+        """GPU Shiloach-Vishkin connected components on the core-point subgraph.
+
+        Returns core_labels: int32 array of length len(core_indices) with
+        consecutive cluster labels 0..n_comp-1.
+        """
+        n_core = len(core_indices)
+        if n_core <= 1:
+            return np.zeros(n_core, dtype=np.int32)
+
+        core_set = set(core_indices)
+        edges_list = []
+        for i in core_indices:
+            for j in core_indices:
+                if j > i and neighbor_mask[i, j]:
+                    edges_list.append(i)
+                    edges_list.append(j)
+
+        if not edges_list:
+            return np.zeros(n_core, dtype=np.int32)
+
+        edges = np.array(edges_list, dtype=np.int32)
+
+        parent = np.empty(n_total, dtype=np.int32)
+        sv_init(parent, n_total)
+
+        num_iters = int(np.ceil(np.log2(max(n_total, 2))))
+        for _ in range(num_iters):
+            sv_hook(edges, parent)
+            sv_shortcut(parent)
+
+        parent_to_label = {}
+        next_label = 0
+        core_labels = np.empty(n_core, dtype=np.int32)
+        for k, idx in enumerate(core_indices):
+            p = parent[idx]
+            if p not in parent_to_label:
+                parent_to_label[p] = next_label
+                next_label += 1
+            core_labels[k] = parent_to_label[p]
+
+        return core_labels
+
+    def fit(self, X, y=None, **kwargs):
+        X, _ = self._validate_data(X, y)
+        if not self._should_use_gpu(X):
+            return self._fallback_fit(X, y, **kwargs)
+
+        n, d = X.shape
+        eps = self._estimator.eps
+        min_samples = self._estimator.min_samples
+
+        D = pairwise_distance(X)
+        eps_sq = eps * eps
+
+        neighbor_mask = D <= eps_sq
+        neighbor_counts = neighbor_mask.sum(axis=1)
+
+        core_mask = neighbor_counts >= min_samples
+        core_indices = np.where(core_mask)[0]
+        n_core = len(core_indices)
+
+        if n_core == 0:
+            labels = -np.ones(n, dtype=np.int32)
+            self._estimator.core_sample_indices_ = np.array([], dtype=np.int32)
+            self._estimator.components_ = np.empty((0, d), dtype=np.float32)
+            self._estimator.labels_ = labels
+            self._fitted = True
+            return self
+
+        core_labels = self._gpu_sv_connected_components(core_indices, n, neighbor_mask)
+
+        labels = -np.ones(n, dtype=np.int32)
+        for k, idx in enumerate(core_indices):
+            labels[idx] = core_labels[k]
+
+        for i in range(n):
+            if not core_mask[i]:
+                core_neighbors = np.where(neighbor_mask[i] & core_mask)[0]
+                if len(core_neighbors) > 0:
+                    labels[i] = labels[core_neighbors[0]]
+
+        self._estimator.core_sample_indices_ = core_indices.astype(np.int32)
+        self._estimator.components_ = X[core_indices].copy()
+        self._estimator.labels_ = labels
+        self._fitted = True
+        return self

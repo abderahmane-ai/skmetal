@@ -3,10 +3,12 @@
 import numpy as np
 import pytest
 from sklearn.datasets import make_classification, make_regression, make_blobs
-from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression
+from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression, Lasso, ElasticNet
 from sklearn.decomposition import PCA, TruncatedSVD
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.naive_bayes import GaussianNB
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 import skmetal
 from skmetal import _bridge
 
@@ -20,7 +22,8 @@ pytestmark = [
 ]
 
 
-SKIP_ATTRS = {"n_iter_", "n_features_in_", "n_features_out_", "n_samples_seen_"}
+SKIP_ATTRS = {"n_iter_", "n_features_in_", "n_features_out_", "n_samples_seen_",
+               "_fit_X", "_y", "n_samples_fit_"}
 
 
 def _match_clusters(gpu_centers, cpu_centers):
@@ -81,6 +84,20 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
      lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
     (MinMaxScaler,
      lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
+    (RobustScaler,
+     lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
+    (Lasso,
+     lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
+    (KNeighborsClassifier,
+     lambda: make_classification(n_samples=2000, n_features=20, n_informative=10, random_state=42), True),
+    (KNeighborsRegressor,
+     lambda: make_regression(n_samples=2000, n_features=20, noise=0.1, random_state=42), True),
+    (ElasticNet,
+     lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
+    (GaussianNB,
+     lambda: make_classification(n_samples=2000, n_features=20, n_informative=10, random_state=42), True),
+    (DBSCAN,
+     lambda: make_blobs(n_samples=2000, centers=5, n_features=10, cluster_std=0.5, random_state=42), False),
 ])
 def test_estimator_correctness(EstimatorCls, data_fn, has_y):
     """Compare GPU-accelerated estimator against CPU baseline."""
@@ -89,7 +106,14 @@ def test_estimator_correctness(EstimatorCls, data_fn, has_y):
     if y is not None:
         y = y.astype(np.float32)
 
-    common_kwargs = {"random_state": 42} if EstimatorCls.__name__ in ("KMeans", "LogisticRegression") else {}
+    extra_kwargs = {}
+    if EstimatorCls.__name__ in ("KMeans", "LogisticRegression"):
+        extra_kwargs = {"random_state": 42}
+    if EstimatorCls.__name__ in ("KNeighborsClassifier", "KNeighborsRegressor"):
+        extra_kwargs = {"n_neighbors": 5}
+    if EstimatorCls.__name__ in ("DBSCAN",):
+        extra_kwargs = {"eps": 0.5, "min_samples": 5}
+    common_kwargs = extra_kwargs
 
     cpu_model = EstimatorCls(**common_kwargs)
     if has_y:

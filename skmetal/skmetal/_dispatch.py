@@ -17,11 +17,19 @@ def _get_gpu_impl(estimator):
         "MetalLinearRegression": ("skmetal.estimators.linear_model", "MetalLinearRegression"),
         "MetalRidge": ("skmetal.estimators.linear_model", "MetalRidge"),
         "MetalLogisticRegression": ("skmetal.estimators.linear_model", "MetalLogisticRegression"),
+        "MetalLasso": ("skmetal.estimators.linear_model", "MetalLasso"),
+        "MetalElasticNet": ("skmetal.estimators.linear_model", "MetalElasticNet"),
         "MetalPCA": ("skmetal.estimators.decomposition", "MetalPCA"),
         "MetalTruncatedSVD": ("skmetal.estimators.decomposition", "MetalTruncatedSVD"),
         "MetalKMeans": ("skmetal.estimators.cluster", "MetalKMeans"),
+        "MetalDBSCAN": ("skmetal.estimators.cluster", "MetalDBSCAN"),
+        "MetalGaussianNB": ("skmetal.estimators.naive_bayes", "MetalGaussianNB"),
         "MetalStandardScaler": ("skmetal.estimators.preprocessing", "MetalStandardScaler"),
         "MetalMinMaxScaler": ("skmetal.estimators.preprocessing", "MetalMinMaxScaler"),
+        "MetalRobustScaler": ("skmetal.estimators.preprocessing", "MetalRobustScaler"),
+        "MetalKNeighborsClassifier": ("skmetal.estimators.neighbors", "MetalKNeighborsClassifier"),
+        "MetalKNeighborsRegressor": ("skmetal.estimators.neighbors", "MetalKNeighborsRegressor"),
+        "MetalNearestNeighbors": ("skmetal.estimators.neighbors", "MetalNearestNeighbors"),
     }
     mod_name, cls_name = module_map[gpu_name]
     mod = __import__(mod_name, fromlist=[cls_name])

@@ -34,7 +34,7 @@ def accelerate(obj=None):
     if isinstance(obj, type):
         return _Accelerator._wrap_class(obj)
 
-    if hasattr(obj, "fit") and (hasattr(obj, "predict") or hasattr(obj, "transform")):
+    if hasattr(obj, "fit"):
         return _wrap_estimator(obj)
 
     if callable(obj):
@@ -86,7 +86,7 @@ class _Accelerator:
             return _wrap_pipeline(obj)
         if isinstance(obj, type):
             return self._wrap_class(obj)
-        if hasattr(obj, "fit") and (hasattr(obj, "predict") or hasattr(obj, "transform")):
+        if hasattr(obj, "fit"):
             return _wrap_estimator(obj)
         if callable(obj):
             @wraps(obj)

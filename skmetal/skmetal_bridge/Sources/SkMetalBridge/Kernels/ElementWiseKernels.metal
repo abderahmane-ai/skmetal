@@ -60,3 +60,16 @@ kernel void norm_sq(
     if (tid >= n) return;
     output[tid] = input[tid] * input[tid];
 }
+
+// Transpose f32 matrix (row-major ↔ column-major)
+// Each thread copies one element: gid.x = col, gid.y = row
+kernel void transpose_f32(
+    device const float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    constant uint& rows [[buffer(2)]],
+    constant uint& cols [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= cols || gid.y >= rows) return;
+    output[gid.x * rows + gid.y] = input[gid.y * cols + gid.x];
+}

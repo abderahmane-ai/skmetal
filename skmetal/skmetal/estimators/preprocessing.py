@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import scaler_fit, column_minmax
+from .._bridge import scaler_fit, column_minmax, column_transform
 
 
 class MetalStandardScaler(BaseGPUEstimator):
@@ -60,3 +60,46 @@ class MetalMinMaxScaler(BaseGPUEstimator):
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_transform(X)
         return X * self._estimator.scale_ + self._estimator.min_
+
+
+class MetalRobustScaler(BaseGPUEstimator):
+    def fit(self, X, y=None, **kwargs):
+        X, _ = self._validate_data(X, y)
+        if not self._should_use_gpu(X):
+            return self._fallback_fit(X, y, **kwargs)
+
+        n_features = X.shape[1]
+        q1 = np.empty(n_features, dtype=np.float32)
+        med = np.empty(n_features, dtype=np.float32)
+        q3 = np.empty(n_features, dtype=np.float32)
+
+        for j in range(n_features):
+            col = X[:, j]
+            q1[j], med[j], q3[j] = np.percentile(col, [25, 50, 75])
+
+        iqr = q3 - q1
+        iqr[iqr < 1e-15] = 1.0
+
+        self._estimator.center_ = med
+        self._estimator.scale_ = iqr
+        self._estimator.n_features_in_ = n_features
+        self._fitted = True
+        return self
+
+    def transform(self, X):
+        X = self._validate_data(X)[0]
+        if not self._should_use_gpu(X) or not self._fitted:
+            return self._fallback_transform(X)
+
+        n, d = X.shape
+        scale = 1.0 / self._estimator.scale_
+        output = np.empty_like(X)
+        column_transform(X, output, self._estimator.center_, scale)
+        return output
+
+    def inverse_transform(self, X):
+        X = self._validate_data(X)[0]
+        if not self._should_use_gpu(X) or not self._fitted:
+            return self._fallback_inverse_transform(X)
+
+        return X * self._estimator.scale_ + self._estimator.center_
