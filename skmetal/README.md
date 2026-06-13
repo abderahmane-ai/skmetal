@@ -1,16 +1,11 @@
-<div align="center">
-
 # skmetal
 
 **Apple Silicon GPU acceleration for scikit-learn**
 
-[![Platform](https://img.shields.io/badge/platform-macOS%20Sonoma%2B-000000?logo=apple&style=flat-square)]()
-[![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-3776AB?logo=python&style=flat-square)]()
-[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)]()
-[![Swift](https://img.shields.io/badge/swift-6.1-F05138?logo=swift&style=flat-square)]()
-[![Metal](https://img.shields.io/badge/metal-3%2F4-00BFFF?style=flat-square)]()
+[![Platform](https://img.shields.io/badge/platform-macOS%20Sonoma%2B-000000?logo=apple&style=flat-square)](https://github.com/abderahmane-ai/skmetal)
+[![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-3776AB?logo=python&style=flat-square)](https://github.com/abderahmane-ai/skmetal)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](https://github.com/abderahmane-ai/skmetal)
 [![CI](https://github.com/abderahmane-ai/skmetal/actions/workflows/ci.yml/badge.svg)](https://github.com/abderahmane-ai/skmetal/actions/workflows/ci.yml)
-[![Estimators](https://img.shields.io/badge/estimators-17-blue?style=flat-square)]()
 
 ```python
 import skmetal
@@ -24,8 +19,6 @@ m = model()
 m.fit(X_train, y_train)
 m.predict(X_test)
 ```
-
-</div>
 
 ---
 
@@ -53,7 +46,7 @@ Apple Silicon's unified memory architecture enables zero-copy data sharing: nump
 pip install skmetal
 ```
 
-> **Note**: The pip package will automatically build the Swift Metal bridge on install (requires Xcode).
+> **Note**: macOS 14+ and Apple Silicon required. Xcode not needed for the pip package.
 
 ### From source
 
