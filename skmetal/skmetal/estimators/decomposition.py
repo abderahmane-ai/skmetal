@@ -55,8 +55,6 @@ class MetalTruncatedSVD(BaseGPUEstimator):
         B = gemm(Q, X, trans_A=True)
         B_np = np.array(B, dtype=np.float64)
         U_B, s_B, Vt_B = linalg.svd(B_np, full_matrices=False)
-        U_B_sub = U_B[:, :n_components].astype(np.float32, order="C")
-        V = gemm(Q, U_B_sub)
         S = s_B[:n_components].astype(np.float32)
         Vt = Vt_B[:n_components].astype(np.float32)
         _, Vt = svd_flip(None, Vt, u_based_decision=False)

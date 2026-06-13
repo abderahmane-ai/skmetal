@@ -121,7 +121,6 @@ class MetalDBSCAN(BaseGPUEstimator):
         if n_core <= 1:
             return np.zeros(n_core, dtype=np.int32)
 
-        core_set = set(core_indices)
         edges_list = []
         for i in core_indices:
             for j in core_indices:

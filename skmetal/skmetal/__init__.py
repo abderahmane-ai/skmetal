@@ -19,6 +19,8 @@ from ._config import get_config, set_device, set_threshold, set_dtype, set_verbo
 from .accelerate import accelerate, accelerate_context
 from ._bridge import device_info
 __all__ = [
+    "__version__",
+    "__version_info__",
     "accelerate",
     "accelerate_context",
     "get_config",

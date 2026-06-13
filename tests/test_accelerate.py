@@ -1,8 +1,5 @@
 """Tests for accelerator decorator, context manager, and dispatch edge cases."""
-import numpy as np
-import pytest
 from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.svm import SVC
