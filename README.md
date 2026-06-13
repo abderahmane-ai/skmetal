@@ -11,6 +11,7 @@
 [![Metal](https://img.shields.io/badge/metal-3%2F4-00BFFF?style=flat-square)]()
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square)]()
 [![Estimators](https://img.shields.io/badge/estimators-17-blue?style=flat-square)]()
+</div>
 
 ```python
 import skmetal
@@ -24,8 +25,6 @@ m = model()
 m.fit(X_train, y_train)
 m.predict(X_test)
 ```
-
-</div>
 
 ---
 
