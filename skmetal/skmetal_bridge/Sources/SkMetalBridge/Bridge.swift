@@ -1346,7 +1346,7 @@ public func skmetal_knn_tiled_kneighbors(
         return 1
     }
 
-    var cb = ctx.commandQueue.makeCommandBuffer()!
+    let cb = ctx.commandQueue.makeCommandBuffer()!
     if let normPipeline = ctx.getPipeline(name: "row_norm_sq", functionName: "row_norm_sq") {
         let enc = cb.makeComputeCommandEncoder()!
         enc.setComputePipelineState(normPipeline)
@@ -1370,8 +1370,6 @@ public func skmetal_knn_tiled_kneighbors(
                                   threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
         enc2.endEncoding()
     }
-    cb.commit()
-    cb.waitUntilCompleted()
 
     // Allocate global top-k buffer and initialize to INFINITY
     guard let gValsBuffer = ctx.device.makeBuffer(length: kSize, options: .storageModeShared),
@@ -1440,8 +1438,6 @@ public func skmetal_knn_tiled_kneighbors(
         let matrixTSlice = MPSMatrix(buffer: trainSliceBuffer, descriptor: descTSlice)
         let matrixDot = MPSMatrix(buffer: dotBuffer, descriptor: descDot)
 
-        cb = ctx.commandQueue.makeCommandBuffer()!
-
         // Step 1: GEMM — X_query @ X_train_tile^T
         let gemm = MPSMatrixMultiplication(
             device: ctx.device, transposeLeft: false, transposeRight: true,
@@ -1483,11 +1479,11 @@ public func skmetal_knn_tiled_kneighbors(
                                       threadsPerThreadgroup: tgSize1)
         encMerge.endEncoding()
 
-        cb.commit()
-        cb.waitUntilCompleted()
-
         tileStart += tileSize
     }
+
+    cb.commit()
+    cb.waitUntilCompleted()
 
     // Copy global top-k to output
     memcpy(outValsBuffer.contents(), gValsBuffer.contents(), kSize)
