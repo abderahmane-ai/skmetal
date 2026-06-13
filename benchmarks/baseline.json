@@ -1,0 +1,50 @@
+[
+  {
+    "estimator": "LinearRegression",
+    "n_samples": 50000,
+    "n_features": 200,
+    "cpu_time": 0.093,
+    "gpu_time": 0.016,
+    "speedup": 5.93
+  },
+  {
+    "estimator": "Ridge",
+    "n_samples": 50000,
+    "n_features": 200,
+    "cpu_time": 0.012,
+    "gpu_time": 0.011,
+    "speedup": 1.16
+  },
+  {
+    "estimator": "LogisticRegression",
+    "n_samples": 20000,
+    "n_features": 100,
+    "cpu_time": 0.011,
+    "gpu_time": 0.012,
+    "speedup": 0.91
+  },
+  {
+    "estimator": "PCA",
+    "n_samples": 20000,
+    "n_features": 500,
+    "cpu_time": 0.020,
+    "gpu_time": 0.021,
+    "speedup": 0.95
+  },
+  {
+    "estimator": "KMeans",
+    "n_samples": 50000,
+    "n_features": 50,
+    "cpu_time": 0.077,
+    "gpu_time": 0.111,
+    "speedup": 0.69
+  },
+  {
+    "estimator": "StandardScaler",
+    "n_samples": 100000,
+    "n_features": 100,
+    "cpu_time": 0.034,
+    "gpu_time": 0.004,
+    "speedup": 8.27
+  }
+]

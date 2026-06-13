@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.Python
+
+# Swift / Xcode
+skmetal/skmetal_bridge/.build/
+*.xcuserdata
+*.xcworkspace/xcuserdata
+DerivedData/
+*.dylib
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.venv
+venv/
+env/
+
+# Generated
+skmetal/skmetal/MetalSource.swift
+skmetal/skmetal_bridge/Sources/SkMetalBridge/MetalSource.swift
+*.metallib
+
+# Internal tracking
+skmetal_core/IMPL.md

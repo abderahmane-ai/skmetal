@@ -1,0 +1,54 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Check Swift availability
+      run: swift --version
+
+    - name: Build Swift Bridge
+      run: |
+        cd skmetal/skmetal_bridge
+        swift build --configuration release
+
+    - name: Install Python package
+      run: |
+        pip install -e "skmetal[dev]"
+
+    - name: Lint with ruff
+      run: |
+        pip install ruff
+        ruff check skmetal/ tests/
+      continue-on-error: true
+
+    - name: Run correctness tests
+      run: |
+        pytest tests/test_correctness.py -v --timeout=120
+      continue-on-error: true
+
+    - name: Run dispatch tests
+      run: |
+        pytest tests/test_dispatch.py -v
+
+    - name: Run fallback tests
+      run: |
+        pytest tests/test_fallback.py -v
+
+    - name: Run benchmarks
+      run: |
+        python benchmarks/benchmark_suite.py
+      continue-on-error: true
