@@ -1,4 +1,3 @@
-import Foundation
 import Metal
 
 actor BufferPool {
@@ -22,7 +21,9 @@ actor BufferPool {
 
     func prewarm(sizes: [Int]) {
         for size in sizes {
-            _ = acquire(count: size, dtype: Float.self)
+            if let buf = acquire(count: size, dtype: Float.self) {
+                release(buf)
+            }
         }
     }
 }

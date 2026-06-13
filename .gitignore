@@ -38,5 +38,5 @@ skmetal/skmetal/MetalSource.swift
 skmetal/skmetal_bridge/Sources/SkMetalBridge/MetalSource.swift
 *.metallib
 
-# Internal tracking
-skmetal_core/IMPL.md
+# Removed scaffolding
+skmetal_core/

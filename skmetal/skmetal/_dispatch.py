@@ -30,6 +30,8 @@ def _get_gpu_impl(estimator):
         "MetalKNeighborsClassifier": ("skmetal.estimators.neighbors", "MetalKNeighborsClassifier"),
         "MetalKNeighborsRegressor": ("skmetal.estimators.neighbors", "MetalKNeighborsRegressor"),
         "MetalNearestNeighbors": ("skmetal.estimators.neighbors", "MetalNearestNeighbors"),
+        "MetalHistGradientBoostingRegressor": ("skmetal.estimators.ensemble", "MetalHistGradientBoostingRegressor"),
+        "MetalHistGradientBoostingClassifier": ("skmetal.estimators.ensemble", "MetalHistGradientBoostingClassifier"),
     }
     mod_name, cls_name = module_map[gpu_name]
     mod = __import__(mod_name, fromlist=[cls_name])

@@ -1604,58 +1604,6 @@ public func skmetal_kmeans_batch_fused(
     return 0
 }
 
-// MARK: - KNN: Select neighbors from GEMM output (hybrid approach)
-
-@_cdecl("skmetal_knn_select_from_gemm")
-public func skmetalKnnSelectFromGemm(
-    rawDot: UnsafeRawPointer,
-    rQuery: UnsafeRawPointer,
-    rTrain: UnsafeRawPointer,
-    outIndices: UnsafeMutableRawPointer,
-    outValues: UnsafeMutableRawPointer,
-    nQ: Int,
-    nT: Int,
-    k: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let dotSize = nQ * nT * MemoryLayout<Float>.stride
-    let rqSize = nQ * MemoryLayout<Float>.stride
-    let rtSize = nT * MemoryLayout<Float>.stride
-    let idxSize = nQ * k * MemoryLayout<Int32>.stride
-    let valSize = nQ * k * MemoryLayout<Float>.stride
-
-    guard let pipeline = ctx.getPipeline(name: "knn_select_from_gemm", functionName: "knn_select_from_gemm"),
-          let dotBuffer = wrapInput(rawDot, length: dotSize, device: ctx.device),
-          let rqBuffer = wrapInput(rQuery, length: rqSize, device: ctx.device),
-          let rtBuffer = wrapInput(rTrain, length: rtSize, device: ctx.device),
-          let idxBuffer = wrapOutput(outIndices, length: idxSize, device: ctx.device),
-          let valBuffer = wrapOutput(outValues, length: valSize, device: ctx.device) else {
-        return 1
-    }
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
-
-    encoder.setComputePipelineState(pipeline)
-    encoder.setBuffer(dotBuffer, offset: 0, index: 0)
-    encoder.setBuffer(rqBuffer, offset: 0, index: 1)
-    encoder.setBuffer(rtBuffer, offset: 0, index: 2)
-    encoder.setBuffer(idxBuffer, offset: 0, index: 3)
-    encoder.setBuffer(valBuffer, offset: 0, index: 4)
-    var nqU = UInt32(nQ); var ntU = UInt32(nT); var kU = UInt32(k)
-    encoder.setBytes(&nqU, length: MemoryLayout<UInt32>.stride, index: 5)
-    encoder.setBytes(&ntU, length: MemoryLayout<UInt32>.stride, index: 6)
-    encoder.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
-
-    let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-    encoder.dispatchThreadgroups(MTLSize(width: nQ, height: 1, depth: 1), threadsPerThreadgroup: tgSize)
-    encoder.endEncoding()
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
 // MARK: - KNN vote classification
 
 @_cdecl("skmetal_knn_vote_classify")
@@ -2132,6 +2080,316 @@ public func skmetal_sv_shortcut(
     return 0
 }
 
+// MARK: - Tree Predict (GPU)
+
+@_cdecl("skmetal_tree_predict_all")
+public func skmetal_tree_predict_all(
+    X: UnsafeRawPointer,
+    allTreeValues: UnsafeRawPointer,
+    allTreeFeature: UnsafeRawPointer,
+    allTreeThreshold: UnsafeRawPointer,
+    allTreeLeft: UnsafeRawPointer,
+    allTreeRight: UnsafeRawPointer,
+    allTreeIsLeaf: UnsafeRawPointer,
+    treeOffsets: UnsafeRawPointer,
+    treeNNodes: UnsafeRawPointer,
+    baseline: UnsafeRawPointer,
+    predictions: UnsafeMutableRawPointer,
+    n: Int,
+    nFeatures: Int,
+    nTrees: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    // Compute total nodes sum for flat array sizes
+    let totalNodesPtr = treeNNodes.assumingMemoryBound(to: UInt32.self)
+    var totalNodes: UInt32 = 0
+    for i in 0..<nTrees { totalNodes += totalNodesPtr[i] }
+    let tn = Int(totalNodes)
+
+    let xSize = n * nFeatures * MemoryLayout<Float>.stride
+    let arrSize = tn * MemoryLayout<Float>.stride
+    let intSize = tn * MemoryLayout<Int32>.stride
+    let offSize = nTrees * MemoryLayout<UInt32>.stride
+    let predSize = n * MemoryLayout<Float>.stride
+
+    guard let pipeline = ctx.getPipeline(name: "tree_predict_all", functionName: "tree_predict_all"),
+          let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
+          let tvBuffer = wrapInput(allTreeValues, length: arrSize, device: ctx.device),
+          let tfBuffer = wrapInput(allTreeFeature, length: intSize, device: ctx.device),
+          let ttBuffer = wrapInput(allTreeThreshold, length: arrSize, device: ctx.device),
+          let tlBuffer = wrapInput(allTreeLeft, length: intSize, device: ctx.device),
+          let trBuffer = wrapInput(allTreeRight, length: intSize, device: ctx.device),
+          let tleafBuffer = wrapInput(allTreeIsLeaf, length: tn * MemoryLayout<UInt8>.stride, device: ctx.device),
+          let offBuffer = wrapInput(treeOffsets, length: offSize, device: ctx.device),
+          let nnBuffer = wrapInput(treeNNodes, length: offSize, device: ctx.device),
+          let blBuffer = wrapInput(baseline, length: MemoryLayout<Float>.stride, device: ctx.device),
+          let predBuffer = wrapOutput(predictions, length: predSize, device: ctx.device) else {
+        return 1
+    }
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+    let enc = cb.makeComputeCommandEncoder()!
+    enc.setComputePipelineState(pipeline)
+    enc.setBuffer(xBuffer, offset: 0, index: 0)
+    enc.setBuffer(tvBuffer, offset: 0, index: 1)
+    enc.setBuffer(tfBuffer, offset: 0, index: 2)
+    enc.setBuffer(ttBuffer, offset: 0, index: 3)
+    enc.setBuffer(tlBuffer, offset: 0, index: 4)
+    enc.setBuffer(trBuffer, offset: 0, index: 5)
+    enc.setBuffer(tleafBuffer, offset: 0, index: 6)
+    enc.setBuffer(offBuffer, offset: 0, index: 7)
+    enc.setBuffer(nnBuffer, offset: 0, index: 8)
+    enc.setBuffer(blBuffer, offset: 0, index: 9)
+    enc.setBuffer(predBuffer, offset: 0, index: 10)
+    var nU = UInt32(n); var nfU = UInt32(nFeatures); var ntU = UInt32(nTrees)
+    enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 11)
+    enc.setBytes(&nfU, length: MemoryLayout<UInt32>.stride, index: 12)
+    enc.setBytes(&ntU, length: MemoryLayout<UInt32>.stride, index: 13)
+    enc.dispatchThreadgroups(MTLSize(width: (n + 255) / 256, height: 1, depth: 1),
+                             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    enc.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
+@_cdecl("skmetal_tree_predict")
+public func skmetal_tree_predict(
+    X: UnsafeRawPointer,
+    treeValues: UnsafeRawPointer,
+    treeFeature: UnsafeRawPointer,
+    treeThreshold: UnsafeRawPointer,
+    treeLeft: UnsafeRawPointer,
+    treeRight: UnsafeRawPointer,
+    treeIsLeaf: UnsafeRawPointer,
+    predictions: UnsafeMutableRawPointer,
+    n: Int,
+    nFeatures: Int,
+    nNodes: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let xSize = n * nFeatures * MemoryLayout<Float>.stride
+    let nodeSize = nNodes * MemoryLayout<Float>.stride
+    let intSize = nNodes * MemoryLayout<Int32>.stride
+    let predSize = n * MemoryLayout<Float>.stride
+
+    guard let pipeline = ctx.getPipeline(name: "tree_predict", functionName: "tree_predict"),
+          let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
+          let tvBuffer = wrapInput(treeValues, length: nodeSize, device: ctx.device),
+          let tfBuffer = wrapInput(treeFeature, length: intSize, device: ctx.device),
+          let ttBuffer = wrapInput(treeThreshold, length: nodeSize, device: ctx.device),
+          let tlBuffer = wrapInput(treeLeft, length: intSize, device: ctx.device),
+          let trBuffer = wrapInput(treeRight, length: intSize, device: ctx.device),
+          let tleafBuffer = wrapInput(treeIsLeaf, length: nNodes * MemoryLayout<UInt8>.stride, device: ctx.device),
+          let predBuffer = wrapOutput(predictions, length: predSize, device: ctx.device) else {
+        return 1
+    }
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+    let enc = cb.makeComputeCommandEncoder()!
+    enc.setComputePipelineState(pipeline)
+    enc.setBuffer(xBuffer, offset: 0, index: 0)
+    enc.setBuffer(tvBuffer, offset: 0, index: 1)
+    enc.setBuffer(tfBuffer, offset: 0, index: 2)
+    enc.setBuffer(ttBuffer, offset: 0, index: 3)
+    enc.setBuffer(tlBuffer, offset: 0, index: 4)
+    enc.setBuffer(trBuffer, offset: 0, index: 5)
+    enc.setBuffer(tleafBuffer, offset: 0, index: 6)
+    enc.setBuffer(predBuffer, offset: 0, index: 7)
+    var nU = UInt32(n); var nfU = UInt32(nFeatures); var nnU = UInt32(nNodes)
+    enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 8)
+    enc.setBytes(&nfU, length: MemoryLayout<UInt32>.stride, index: 9)
+    enc.setBytes(&nnU, length: MemoryLayout<UInt32>.stride, index: 10)
+    enc.dispatchThreadgroups(MTLSize(width: (n + 255) / 256, height: 1, depth: 1),
+                             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    enc.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
+// MARK: - Row max (for softmax)
+
+@_cdecl("skmetal_row_max")
+public func skmetal_row_max(
+    matrix: UnsafeRawPointer,
+    maxVals: UnsafeMutableRawPointer,
+    n: Int,
+    nCols: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let matSize = n * nCols * MemoryLayout<Float>.stride
+    let maxSize = n * MemoryLayout<Float>.stride
+
+    guard let pipeline = ctx.getPipeline(name: "row_max", functionName: "row_max"),
+          let matBuffer = wrapInput(matrix, length: matSize, device: ctx.device),
+          let maxBuffer = wrapOutput(maxVals, length: maxSize, device: ctx.device) else {
+        return 1
+    }
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+    let enc = cb.makeComputeCommandEncoder()!
+    enc.setComputePipelineState(pipeline)
+    enc.setBuffer(matBuffer, offset: 0, index: 0)
+    enc.setBuffer(maxBuffer, offset: 0, index: 1)
+    var nU = UInt32(n); var ncU = UInt32(nCols)
+    enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+    enc.setBytes(&ncU, length: MemoryLayout<UInt32>.stride, index: 3)
+    enc.dispatchThreadgroups(MTLSize(width: n, height: 1, depth: 1),
+                             threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+    enc.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
+// MARK: - Row sum (for softmax)
+
+@_cdecl("skmetal_row_sum")
+public func skmetal_row_sum(
+    matrix: UnsafeRawPointer,
+    sums: UnsafeMutableRawPointer,
+    n: Int,
+    nCols: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let matSize = n * nCols * MemoryLayout<Float>.stride
+    let sumSize = n * MemoryLayout<Float>.stride
+
+    guard let pipeline = ctx.getPipeline(name: "row_sum", functionName: "row_sum"),
+          let matBuffer = wrapInput(matrix, length: matSize, device: ctx.device),
+          let sumBuffer = wrapOutput(sums, length: sumSize, device: ctx.device) else {
+        return 1
+    }
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+    let enc = cb.makeComputeCommandEncoder()!
+    enc.setComputePipelineState(pipeline)
+    enc.setBuffer(matBuffer, offset: 0, index: 0)
+    enc.setBuffer(sumBuffer, offset: 0, index: 1)
+    var nU = UInt32(n); var ncU = UInt32(nCols)
+    enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+    enc.setBytes(&ncU, length: MemoryLayout<UInt32>.stride, index: 3)
+    enc.dispatchThreadgroups(MTLSize(width: n, height: 1, depth: 1),
+                             threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+    enc.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
+// MARK: - Softmax exp (numerically stable)
+
+@_cdecl("skmetal_softmax_exp")
+public func skmetal_softmax_exp(
+    matrix: UnsafeRawPointer,
+    maxVals: UnsafeRawPointer,
+    output: UnsafeMutableRawPointer,
+    n: Int,
+    nCols: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let matSize = n * nCols * MemoryLayout<Float>.stride
+    let maxSize = n * MemoryLayout<Float>.stride
+
+    guard let pipeline = ctx.getPipeline(name: "softmax_exp", functionName: "softmax_exp"),
+          let matBuffer = wrapInput(matrix, length: matSize, device: ctx.device),
+          let maxBuffer = wrapInput(maxVals, length: maxSize, device: ctx.device),
+          let outBuffer = wrapOutput(output, length: matSize, device: ctx.device) else {
+        return 1
+    }
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+    let enc = cb.makeComputeCommandEncoder()!
+    enc.setComputePipelineState(pipeline)
+    enc.setBuffer(matBuffer, offset: 0, index: 0)
+    enc.setBuffer(maxBuffer, offset: 0, index: 1)
+    enc.setBuffer(outBuffer, offset: 0, index: 2)
+    var nU = UInt32(n); var ncU = UInt32(nCols)
+    enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+    enc.setBytes(&ncU, length: MemoryLayout<UInt32>.stride, index: 4)
+    let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+    let tgCount = MTLSize(width: (nCols + 15) / 16, height: (n + 15) / 16, depth: 1)
+    enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+    enc.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
+// MARK: - Softmax normalize + residual
+
+@_cdecl("skmetal_softmax_normalize_residual")
+public func skmetal_softmax_normalize_residual(
+    prob: UnsafeMutableRawPointer,
+    rowSums: UnsafeRawPointer,
+    y: UnsafeRawPointer,
+    residual: UnsafeMutableRawPointer,
+    n: Int,
+    nCols: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let matSize = n * nCols * MemoryLayout<Float>.stride
+    let sumSize = n * MemoryLayout<Float>.stride
+    let ySize = n * MemoryLayout<Float>.stride
+
+    guard let pipeline = ctx.getPipeline(name: "softmax_normalize_residual", functionName: "softmax_normalize_residual"),
+          let probBuffer = wrapOutput(prob, length: matSize, device: ctx.device),
+          let sumBuffer = wrapInput(rowSums, length: sumSize, device: ctx.device),
+          let yBuffer = wrapInput(y, length: ySize, device: ctx.device),
+          let resBuffer = wrapOutput(residual, length: matSize, device: ctx.device) else {
+        return 1
+    }
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+    let enc = cb.makeComputeCommandEncoder()!
+    enc.setComputePipelineState(pipeline)
+    enc.setBuffer(probBuffer, offset: 0, index: 0)
+    enc.setBuffer(sumBuffer, offset: 0, index: 1)
+    enc.setBuffer(yBuffer, offset: 0, index: 2)
+    enc.setBuffer(resBuffer, offset: 0, index: 3)
+    var nU = UInt32(n); var ncU = UInt32(nCols)
+    enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 4)
+    enc.setBytes(&ncU, length: MemoryLayout<UInt32>.stride, index: 5)
+    let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+    let tgCount = MTLSize(width: (nCols + 15) / 16, height: (n + 15) / 16, depth: 1)
+    enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+    enc.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
+// MARK: - Negate (element-wise)
+
+@_cdecl("skmetal_negate")
+public func skmetal_negate(
+    a: UnsafeRawPointer,
+    output: UnsafeMutableRawPointer,
+    n: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let byteSize = n * MemoryLayout<Float>.stride
+    guard let pipeline = ctx.getPipeline(name: "negate", functionName: "negate"),
+          let aBuffer = wrapInput(a, length: byteSize, device: ctx.device),
+          let outBuffer = wrapOutput(output, length: byteSize, device: ctx.device) else {
+        return 1
+    }
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+    let enc = cb.makeComputeCommandEncoder()!
+    enc.setComputePipelineState(pipeline)
+    enc.setBuffer(aBuffer, offset: 0, index: 0)
+    enc.setBuffer(outBuffer, offset: 0, index: 1)
+    var nU = UInt32(n)
+    enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+    enc.dispatchThreadgroups(MTLSize(width: (n + 255) / 256, height: 1, depth: 1),
+                             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    enc.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
 // MARK: - Pipeline warmup
 
 @_cdecl("skmetal_warmup")
@@ -2163,7 +2421,6 @@ public func skmetal_warmup() -> Int32 {
         ("kmeans_combine_normalize", "kmeans_combine_normalize"),
         ("kmeans_assign_partial", "kmeans_assign_partial"),
         ("kmeans_update", "kmeans_update"),
-        ("knn_select_from_gemm", "knn_select_from_gemm"),
         ("knn_merge_topk", "knn_merge_topk"),
         ("knn_vote_classify", "knn_vote_classify"),
         ("knn_vote_regress", "knn_vote_regress"),
@@ -2173,6 +2430,13 @@ public func skmetal_warmup() -> Int32 {
         ("sv_init", "sv_init"),
         ("sv_hook", "sv_hook"),
         ("sv_shortcut", "sv_shortcut"),
+        ("tree_predict", "tree_predict"),
+        ("tree_predict_all", "tree_predict_all"),
+        ("row_max", "row_max"),
+        ("row_sum", "row_sum"),
+        ("softmax_exp", "softmax_exp"),
+        ("softmax_normalize_residual", "softmax_normalize_residual"),
+        ("negate", "negate"),
     ]
 
     let cb = ctx.commandQueue.makeCommandBuffer()!

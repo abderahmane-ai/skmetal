@@ -100,6 +100,6 @@ class MetalRobustScaler(BaseGPUEstimator):
     def inverse_transform(self, X):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
-            return self._fallback_inverse_transform(X)
+            return self._fallback_transform(X)
 
         return X * self._estimator.scale_ + self._estimator.center_

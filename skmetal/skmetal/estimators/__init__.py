@@ -8,6 +8,7 @@ from .cluster import MetalKMeans, MetalDBSCAN
 from .naive_bayes import MetalGaussianNB
 from .preprocessing import MetalStandardScaler, MetalMinMaxScaler, MetalRobustScaler
 from .neighbors import MetalKNeighborsClassifier, MetalKNeighborsRegressor, MetalNearestNeighbors
+from .ensemble import MetalHistGradientBoostingRegressor, MetalHistGradientBoostingClassifier
 
 __all__ = [
     "BaseGPUEstimator",
@@ -28,4 +29,6 @@ __all__ = [
     "MetalKNeighborsClassifier",
     "MetalKNeighborsRegressor",
     "MetalNearestNeighbors",
+    "MetalHistGradientBoostingRegressor",
+    "MetalHistGradientBoostingClassifier",
 ]

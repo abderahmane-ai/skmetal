@@ -10,7 +10,6 @@ class Config:
     threshold: int = 500_000
     dtype: str = "float32"
     verbose: bool = False
-    fallback_warn: bool = True
 
 
 _config = Config()

@@ -3,7 +3,7 @@
 import warnings
 from functools import wraps
 from sklearn.pipeline import Pipeline
-from ._dispatch import _wrap_estimator, _wrap_pipeline, _is_supported
+from ._dispatch import _wrap_estimator, _wrap_pipeline
 from ._config import get_config
 
 

@@ -1,7 +1,6 @@
 import numpy as np
 from sklearn.base import BaseEstimator
-from sklearn.utils.validation import check_array, check_X_y
-from .._bridge import gemm, reduce_sum, reduce_mean_var, pairwise_distance
+from sklearn.utils.validation import check_array
 from .._config import get_config
 
 

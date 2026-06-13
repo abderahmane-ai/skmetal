@@ -1,7 +1,6 @@
 """Python ctypes bridge to the SkMetalBridge dynamic library."""
 
 import ctypes
-import ctypes.util
 import numpy as np
 from pathlib import Path
 
@@ -319,18 +318,6 @@ _lib.skmetal_scale_rows.argtypes = [
     ctypes.c_size_t,  # d
 ]
 _lib.skmetal_scale_rows.restype = ctypes.c_int
-
-_lib.skmetal_knn_select_from_gemm.argtypes = [
-    ctypes.c_void_p,  # raw_dot (X @ X_train^T from MPS GEMM)
-    ctypes.c_void_p,  # r_query
-    ctypes.c_void_p,  # r_train
-    ctypes.c_void_p,  # out_indices
-    ctypes.c_void_p,  # out_values
-    ctypes.c_size_t,  # n_q
-    ctypes.c_size_t,  # n_t
-    ctypes.c_size_t,  # k
-]
-_lib.skmetal_knn_select_from_gemm.restype = ctypes.c_int
 
 _lib.skmetal_knn_vote_classify.argtypes = [
     ctypes.c_void_p,  # indices
@@ -798,27 +785,6 @@ def device_info() -> dict:
     }
 
 
-def knn_select_from_gemm(raw_dot: np.ndarray, r_query: np.ndarray,
-                          r_train: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-    """GPU: select k-nearest neighbors from GEMM dot matrix + expansion trick.
-    
-    Fuses distance_correct + k-select into one kernel (reads GEMM output coalesced).
-    Returns (squared_distances, indices).
-    """
-    n_q, n_t = raw_dot.shape
-    out_indices = np.empty((n_q, k), dtype=np.int32, order="C")
-    out_values = np.empty((n_q, k), dtype=np.float32, order="C")
-    err = _lib.skmetal_knn_select_from_gemm(
-        raw_dot.ctypes.data, r_query.ctypes.data, r_train.ctypes.data,
-        out_indices.ctypes.data, out_values.ctypes.data,
-        ctypes.c_size_t(n_q), ctypes.c_size_t(n_t),
-        ctypes.c_size_t(k),
-    )
-    if err != 0:
-        raise RuntimeError(f"knn_select_from_gemm failed with code {err}")
-    return out_values, out_indices
-
-
 def knn_vote_classify(indices: np.ndarray, train_labels: np.ndarray,
                        predictions: np.ndarray, N: int, k: int, n_train: int) -> None:
     """GPU: majority-vote classification from k-nearest neighbor indices."""
@@ -929,9 +895,190 @@ def sv_shortcut(parent: np.ndarray) -> None:
         raise RuntimeError(f"sv_shortcut failed with code {err}")
 
 
+_lib.skmetal_warmup.argtypes = []
+_lib.skmetal_warmup.restype = ctypes.c_int
+
+
 def warmup():
-    """Pre-compile Metal compute pipelines (not MPS — those are dimension-dependent).
-    
-    Call this once after import to avoid ~30ms cold-start penalty on first fit.
-    """
     _lib.skmetal_warmup()
+
+
+# ============================================================
+# Tree-based models (GPU)
+# ============================================================
+
+_lib.skmetal_tree_predict.argtypes = [
+    ctypes.c_void_p,  # X
+    ctypes.c_void_p,  # tree_values
+    ctypes.c_void_p,  # tree_feature
+    ctypes.c_void_p,  # tree_threshold
+    ctypes.c_void_p,  # tree_left
+    ctypes.c_void_p,  # tree_right
+    ctypes.c_void_p,  # tree_is_leaf
+    ctypes.c_void_p,  # predictions (out)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # n_features
+    ctypes.c_size_t,  # n_nodes
+]
+_lib.skmetal_tree_predict.restype = ctypes.c_int
+
+
+def tree_predict(X: np.ndarray, tree_values: np.ndarray, tree_feature: np.ndarray,
+                 tree_threshold: np.ndarray, tree_left: np.ndarray, tree_right: np.ndarray,
+                 tree_is_leaf: np.ndarray, predictions: np.ndarray) -> None:
+    """GPU: accumulate single tree predictions into output array."""
+    n, n_features = X.shape
+    n_nodes = len(tree_values)
+    err = _lib.skmetal_tree_predict(
+        X.ctypes.data, tree_values.ctypes.data, tree_feature.ctypes.data,
+        tree_threshold.ctypes.data, tree_left.ctypes.data, tree_right.ctypes.data,
+        tree_is_leaf.ctypes.data, predictions.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(n_features), ctypes.c_size_t(n_nodes),
+    )
+    if err != 0:
+        raise RuntimeError(f"tree_predict failed with code {err}")
+
+
+_lib.skmetal_tree_predict_all.argtypes = [
+    ctypes.c_void_p,  # X
+    ctypes.c_void_p,  # all_tree_values (flat, all trees)
+    ctypes.c_void_p,  # all_tree_feature
+    ctypes.c_void_p,  # all_tree_threshold
+    ctypes.c_void_p,  # all_tree_left
+    ctypes.c_void_p,  # all_tree_right
+    ctypes.c_void_p,  # all_tree_is_leaf
+    ctypes.c_void_p,  # tree_offsets (per-tree start index)
+    ctypes.c_void_p,  # tree_n_nodes
+    ctypes.c_void_p,  # baseline (scalar f32)
+    ctypes.c_void_p,  # predictions (out)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # n_features
+    ctypes.c_size_t,  # n_trees
+]
+_lib.skmetal_tree_predict_all.restype = ctypes.c_int
+
+
+def tree_predict_all(X: np.ndarray, all_tree_values: np.ndarray, all_tree_feature: np.ndarray,
+                     all_tree_threshold: np.ndarray, all_tree_left: np.ndarray,
+                     all_tree_right: np.ndarray, all_tree_is_leaf: np.ndarray,
+                     tree_offsets: np.ndarray, tree_n_nodes: np.ndarray,
+                     baseline: np.ndarray, predictions: np.ndarray) -> None:
+    """GPU: predict by traversing ALL trees in a single kernel dispatch."""
+    n, n_features = X.shape
+    n_trees = len(tree_offsets)
+    err = _lib.skmetal_tree_predict_all(
+        X.ctypes.data, all_tree_values.ctypes.data, all_tree_feature.ctypes.data,
+        all_tree_threshold.ctypes.data, all_tree_left.ctypes.data,
+        all_tree_right.ctypes.data, all_tree_is_leaf.ctypes.data,
+        tree_offsets.ctypes.data, tree_n_nodes.ctypes.data,
+        baseline.ctypes.data, predictions.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(n_features), ctypes.c_size_t(n_trees),
+    )
+    if err != 0:
+        raise RuntimeError(f"tree_predict_all failed with code {err}")
+
+
+# ============================================================
+# Softmax / Multinomial helpers (GPU)
+# ============================================================
+
+_lib.skmetal_row_max.argtypes = [
+    ctypes.c_void_p,  # matrix
+    ctypes.c_void_p,  # max_vals (out)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # n_cols
+]
+_lib.skmetal_row_max.restype = ctypes.c_int
+
+
+def row_max(matrix: np.ndarray, max_vals: np.ndarray) -> None:
+    """GPU: find max per row of a matrix."""
+    n, n_cols = matrix.shape
+    err = _lib.skmetal_row_max(
+        matrix.ctypes.data, max_vals.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(n_cols),
+    )
+    if err != 0:
+        raise RuntimeError(f"row_max failed with code {err}")
+
+
+_lib.skmetal_row_sum.argtypes = [
+    ctypes.c_void_p,  # matrix
+    ctypes.c_void_p,  # sums (out)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # n_cols
+]
+_lib.skmetal_row_sum.restype = ctypes.c_int
+
+
+def row_sum(matrix: np.ndarray, sums: np.ndarray) -> None:
+    """GPU: compute sum per row of a matrix."""
+    n, n_cols = matrix.shape
+    err = _lib.skmetal_row_sum(
+        matrix.ctypes.data, sums.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(n_cols),
+    )
+    if err != 0:
+        raise RuntimeError(f"row_sum failed with code {err}")
+
+
+_lib.skmetal_softmax_exp.argtypes = [
+    ctypes.c_void_p,  # matrix
+    ctypes.c_void_p,  # max_vals
+    ctypes.c_void_p,  # output (out)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # n_cols
+]
+_lib.skmetal_softmax_exp.restype = ctypes.c_int
+
+
+def softmax_exp(matrix: np.ndarray, max_vals: np.ndarray, output: np.ndarray) -> None:
+    """GPU: compute exp(matrix[row][col] - max_vals[row]) for each element."""
+    n, n_cols = matrix.shape
+    err = _lib.skmetal_softmax_exp(
+        matrix.ctypes.data, max_vals.ctypes.data, output.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(n_cols),
+    )
+    if err != 0:
+        raise RuntimeError(f"softmax_exp failed with code {err}")
+
+
+_lib.skmetal_softmax_normalize_residual.argtypes = [
+    ctypes.c_void_p,  # prob (in/out)
+    ctypes.c_void_p,  # row_sums
+    ctypes.c_void_p,  # y (class labels)
+    ctypes.c_void_p,  # residual (out)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # n_cols
+]
+_lib.skmetal_softmax_normalize_residual.restype = ctypes.c_int
+
+
+def softmax_normalize_residual(prob: np.ndarray, row_sums: np.ndarray,
+                                y: np.ndarray, residual: np.ndarray) -> None:
+    """GPU: normalize softmax probabilities and compute residual = prob - one_hot."""
+    n, n_cols = prob.shape
+    err = _lib.skmetal_softmax_normalize_residual(
+        prob.ctypes.data, row_sums.ctypes.data, y.ctypes.data, residual.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(n_cols),
+    )
+    if err != 0:
+        raise RuntimeError(f"softmax_normalize_residual failed with code {err}")
+
+
+_lib.skmetal_negate.argtypes = [
+    ctypes.c_void_p,  # a
+    ctypes.c_void_p,  # output (out)
+    ctypes.c_size_t,  # n
+]
+_lib.skmetal_negate.restype = ctypes.c_int
+
+
+def negate(a: np.ndarray, output: np.ndarray) -> None:
+    """GPU: element-wise negation: output[i] = -a[i]."""
+    n = a.size
+    err = _lib.skmetal_negate(
+        a.ctypes.data, output.ctypes.data, ctypes.c_size_t(n),
+    )
+    if err != 0:
+        raise RuntimeError(f"negate failed with code {err}")

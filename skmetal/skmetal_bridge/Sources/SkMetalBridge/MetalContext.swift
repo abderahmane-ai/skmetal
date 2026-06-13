@@ -57,16 +57,4 @@ final class MetalContext: @unchecked Sendable {
         }
     }
 
-    func getMPSGemm(M: Int, N: Int, K: Int, transA: Bool, transB: Bool) -> MPSMatrixMultiplication? {
-        return MPSMatrixMultiplication(
-            device: device,
-            transposeLeft: transA,
-            transposeRight: transB,
-            resultRows: M,
-            resultColumns: N,
-            interiorColumns: K,
-            alpha: 1.0,
-            beta: 0.0
-        )
-    }
 }

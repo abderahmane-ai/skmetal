@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, sigmoid, subtract, axpy, reduce_sum, ridge_fit, logreg_irls_iter, soft_threshold
+from .._bridge import gemm, sigmoid, ridge_fit, logreg_irls_iter, soft_threshold
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -100,7 +100,7 @@ class MetalLasso(BaseGPUEstimator):
         step = 1.0 / L
 
         x = np.zeros(p, dtype=np.float32)
-        y = np.zeros(p, dtype=np.float32)
+        z = np.zeros(p, dtype=np.float32)
         x_temp = np.empty(p, dtype=np.float32)
         x_prev = np.empty(p, dtype=np.float32)
         t = 1.0
@@ -108,8 +108,8 @@ class MetalLasso(BaseGPUEstimator):
         for it in range(max_iter):
             np.copyto(x_prev, x)
 
-            grad = XTX @ y - XTy
-            np.copyto(x_temp, y - step * grad)
+            grad = XTX @ z - XTy
+            np.copyto(x_temp, z - step * grad)
 
             soft_threshold(x, x_temp, step * alpha * n)
 
@@ -118,8 +118,8 @@ class MetalLasso(BaseGPUEstimator):
 
             np.copyto(x_temp, x - x_prev)
             factor = (t_prev - 1.0) / t
-            np.copyto(y, x)
-            y += factor * x_temp
+            np.copyto(z, x)
+            z += factor * x_temp
 
             diff = np.max(np.abs(x - x_prev))
             if diff < tol:
@@ -170,7 +170,7 @@ class MetalElasticNet(BaseGPUEstimator):
         step = 1.0 / L
 
         x = np.zeros(p, dtype=np.float32)
-        y = np.zeros(p, dtype=np.float32)
+        z = np.zeros(p, dtype=np.float32)
         x_temp = np.empty(p, dtype=np.float32)
         x_prev = np.empty(p, dtype=np.float32)
         t = 1.0
@@ -178,8 +178,8 @@ class MetalElasticNet(BaseGPUEstimator):
         for it in range(max_iter):
             np.copyto(x_prev, x)
 
-            grad = XTX @ y - XTy
-            np.copyto(x_temp, y - step * grad)
+            grad = XTX @ z - XTy
+            np.copyto(x_temp, z - step * grad)
 
             soft_threshold(x, x_temp, step * alpha * l1_ratio * n)
             x /= (1.0 + step * alpha * (1.0 - l1_ratio) * n)
@@ -189,8 +189,8 @@ class MetalElasticNet(BaseGPUEstimator):
 
             np.copyto(x_temp, x - x_prev)
             factor = (t_prev - 1.0) / t
-            np.copyto(y, x)
-            y += factor * x_temp
+            np.copyto(z, x)
+            z += factor * x_temp
 
             diff = np.max(np.abs(x - x_prev))
             if diff < tol:

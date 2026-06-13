@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from sklearn.datasets import make_classification, make_regression, make_blobs
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression, Lasso, ElasticNet
+from sklearn.ensemble import HistGradientBoostingRegressor, HistGradientBoostingClassifier
 from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.naive_bayes import GaussianNB
@@ -98,6 +99,10 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
      lambda: make_classification(n_samples=2000, n_features=20, n_informative=10, random_state=42), True),
     (DBSCAN,
      lambda: make_blobs(n_samples=2000, centers=5, n_features=10, cluster_std=0.5, random_state=42), False),
+    (HistGradientBoostingRegressor,
+     lambda: make_regression(n_samples=500, n_features=20, noise=0.1, random_state=42), True),
+    (HistGradientBoostingClassifier,
+     lambda: make_classification(n_samples=500, n_features=20, random_state=42), True),
 ])
 def test_estimator_correctness(EstimatorCls, data_fn, has_y):
     """Compare GPU-accelerated estimator against CPU baseline."""

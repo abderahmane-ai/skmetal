@@ -73,3 +73,82 @@ kernel void transpose_f32(
     if (gid.x >= cols || gid.y >= rows) return;
     output[gid.x * rows + gid.y] = input[gid.y * cols + gid.x];
 }
+
+// Row-wise max: for each row, find maximum value across columns
+kernel void row_max(
+    device const float* matrix [[buffer(0)]],
+    device float* max_vals [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    constant uint& n_cols [[buffer(3)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    float mx = -INFINITY;
+    uint base = tid * n_cols;
+    for (uint j = 0; j < n_cols; j++) {
+        mx = max(mx, matrix[base + j]);
+    }
+    max_vals[tid] = mx;
+}
+
+// Row-wise sum: for each row, compute sum of values
+kernel void row_sum(
+    device const float* matrix [[buffer(0)]],
+    device float* sums [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    constant uint& n_cols [[buffer(3)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    float s = 0.0f;
+    uint base = tid * n_cols;
+    for (uint j = 0; j < n_cols; j++) {
+        s += matrix[base + j];
+    }
+    sums[tid] = s;
+}
+
+// Softmax numerator: exp(x - row_max[row]) for each element
+kernel void softmax_exp(
+    device const float* matrix [[buffer(0)]],
+    device const float* max_vals [[buffer(1)]],
+    device float* output [[buffer(2)]],
+    constant uint& n [[buffer(3)]],
+    constant uint& n_cols [[buffer(4)]],
+    uint2 tid [[thread_position_in_grid]]
+) {
+    uint row = tid.x, col = tid.y;
+    if (row >= n || col >= n_cols) return;
+    output[row * n_cols + col] = exp(matrix[row * n_cols + col] - max_vals[row]);
+}
+
+// Normalize softmax probabilities and compute residual = prob - one_hot
+kernel void softmax_normalize_residual(
+    device float* prob [[buffer(0)]],
+    device const float* row_sums [[buffer(1)]],
+    device const float* y [[buffer(2)]],
+    device float* residual [[buffer(3)]],
+    constant uint& n [[buffer(4)]],
+    constant uint& n_cols [[buffer(5)]],
+    uint2 tid [[thread_position_in_grid]]
+) {
+    uint row = tid.x, col = tid.y;
+    if (row >= n || col >= n_cols) return;
+    uint idx = row * n_cols + col;
+    float p = prob[idx] / row_sums[row];
+    prob[idx] = p;
+    uint true_class = uint(y[row]);
+    float target = (col == true_class) ? 1.0f : 0.0f;
+    residual[idx] = p - target;
+}
+
+// Element-wise: output[i] = -a[i]
+kernel void negate(
+    device const float* a [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    output[tid] = -a[tid];
+}
