@@ -17,6 +17,8 @@ final class MetalContext: @unchecked Sendable {
     private let queueLock = NSLock()
     private var pipelineCache: [String: MTLComputePipelineState] = [:]
     private let cacheLock = NSLock()
+    private var bufferCache: [Int: [MTLBuffer]] = [:]
+    private let bufferLock = NSLock()
 
     var commandQueue: MTLCommandQueue {
         let tid = Thread.current.hashValue
@@ -57,6 +59,27 @@ final class MetalContext: @unchecked Sendable {
             SkMetalBridge.metallib not found. Run: cd skmetal/skmetal_bridge && ./compile_metal.sh
             Searched Bundle.module and Kernels/ subdirectory.
             """)
+    }
+
+    func reusableBuffer(length: Int) -> MTLBuffer? {
+        bufferLock.lock()
+        if var pool = bufferCache[length], !pool.isEmpty {
+            let buf = pool.removeLast()
+            bufferLock.unlock()
+            return buf
+        }
+        bufferLock.unlock()
+        return device.makeBuffer(length: length, options: .storageModeShared)
+    }
+
+    func recycleBuffer(_ buffer: MTLBuffer) {
+        bufferLock.lock()
+        let key = buffer.length
+        if bufferCache[key] == nil {
+            bufferCache[key] = []
+        }
+        bufferCache[key]!.append(buffer)
+        bufferLock.unlock()
     }
 
     func getPipeline(name: String, functionName: String) -> MTLComputePipelineState? {

@@ -22,7 +22,8 @@ class MetalKMeans(BaseGPUEstimator):
         tol = self._estimator.tol
         n_init = self._estimator.n_init
         if n_init == "auto":
-            n_init = 10 if n > 10000 else 5
+            init = getattr(self._estimator, "init", "k-means++")
+            n_init = 1 if init == "k-means++" else (10 if n > 10000 else 5)
 
         best_inertia = np.inf
         best_centroids = None
@@ -56,7 +57,8 @@ class MetalKMeans(BaseGPUEstimator):
 
     def _run_kmeans_batched(self, X, centroids, assignments,
                               n, d, k, num_groups, max_iter, tol):
-        batch_size = max(1, min(5, (max_iter + 9) // 10))
+        # Check convergence at most 3 times; batch reduces GPU round trips
+        batch_size = max(1, (max_iter + 2) // 3)
         total_iters = 0
         for batch_start in range(0, max_iter, batch_size):
             remaining = min(batch_size, max_iter - batch_start)

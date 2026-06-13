@@ -1135,92 +1135,148 @@ public func skmetal_kmeans_batch_fused(
     let cSize = k * d * MemoryLayout<Float>.stride
     let aSize = n * MemoryLayout<UInt32>.stride
 
-    guard let assignPipeline = ctx.getPipeline(name: "kmeans_assign", functionName: "kmeans_assign"),
-          let partialPipeline = ctx.getPipeline(name: "kmeans_partial_sum", functionName: "kmeans_partial_sum"),
-          let combineNormPipeline = ctx.getPipeline(name: "kmeans_combine_normalize", functionName: "kmeans_combine_normalize"),
-          let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
+    guard let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
           let cBuffer = wrapOutput(centroids, length: cSize, device: ctx.device),
           let aBuffer = wrapOutput(assignments, length: aSize, device: ctx.device) else {
         return 1
     }
 
-    let pcSize = numGroups * k * d * MemoryLayout<Float>.stride
-    let pnSize = numGroups * k * MemoryLayout<UInt32>.stride
-    guard let pcBuffer = ctx.device.makeBuffer(length: pcSize, options: .storageModeShared),
-          let pnBuffer = ctx.device.makeBuffer(length: pnSize, options: .storageModeShared) else {
-        return 1
-    }
-
     let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
     let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-    let assignGrid = MTLSize(width: n, height: 1, depth: 1)
-    let partialGrid = MTLSize(width: numGroups, height: 1, depth: 1)
+    let gridSize = MTLSize(width: numGroups, height: 1, depth: 1)
 
-    var nU = UInt32(n), dU = UInt32(d), kU = UInt32(k), ngU = UInt32(numGroups)
+    var nU = UInt32(n), dU = UInt32(d), kU = UInt32(k)
 
-    // Max clusters that fit in 28 KB threadgroup memory for centroids + 256 uint for counts
-    let maxBatchClusters = min(256, max(1, 7168 / d))
+    let pcSize = numGroups * k * d * MemoryLayout<Float>.stride
+    let pnSize = numGroups * k * MemoryLayout<UInt32>.stride
 
-    for _ in 0..<maxIter {
-        // Zero partial buffers
-        let clearEnc = commandBuffer.makeBlitCommandEncoder()!
-        clearEnc.fill(buffer: pcBuffer, range: 0..<pcSize, value: 0)
-        clearEnc.fill(buffer: pnBuffer, range: 0..<pnSize, value: 0)
-        clearEnc.endEncoding()
+    var pcBuffer: MTLBuffer?
+    var pnBuffer: MTLBuffer?
 
-        // 1. Assign: compute nearest centroid for each point
-        let enc1 = commandBuffer.makeComputeCommandEncoder()!
-        enc1.setComputePipelineState(assignPipeline)
-        enc1.setBuffer(xBuffer, offset: 0, index: 0)
-        enc1.setBuffer(cBuffer, offset: 0, index: 1)
-        enc1.setBuffer(aBuffer, offset: 0, index: 2)
-        enc1.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-        enc1.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
-        enc1.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 5)
-        enc1.dispatchThreadgroups(assignGrid, threadsPerThreadgroup: tgSize)
-        enc1.endEncoding()
+    // Fused assign+partial path: k*d <= 7168 (28 KB threadgroup) and k <= 256
+    // Saves 1 dispatch + 1 blit per iteration vs separate assign+partial_sum.
+    if k * d <= 7168 && k <= 256 {
+        guard let assignPartialPipeline = ctx.getPipeline(
+                name: "kmeans_assign_partial", functionName: "kmeans_assign_partial"),
+              let combineNormPipeline = ctx.getPipeline(
+                name: "kmeans_combine_normalize", functionName: "kmeans_combine_normalize"),
+              let buf1 = ctx.reusableBuffer(length: pcSize),
+              let buf2 = ctx.reusableBuffer(length: pnSize) else {
+            return 1
+        }
+        pcBuffer = buf1
+        pnBuffer = buf2
 
-        // 2. Partial sum: per-threadgroup accumulation, dispatched per cluster batch
-        var clusterStart = 0
-        while clusterStart < k {
-            let batchK = min(k - clusterStart, maxBatchClusters)
-            var csU = UInt32(clusterStart)
-            var bkU = UInt32(batchK)
+        var ngU = UInt32(numGroups)
+
+        for _ in 0..<maxIter {
+            let enc1 = commandBuffer.makeComputeCommandEncoder()!
+            enc1.setComputePipelineState(assignPartialPipeline)
+            enc1.setBuffer(xBuffer, offset: 0, index: 0)
+            enc1.setBuffer(cBuffer, offset: 0, index: 1)
+            enc1.setBuffer(pcBuffer!, offset: 0, index: 2)
+            enc1.setBuffer(pnBuffer!, offset: 0, index: 3)
+            enc1.setBuffer(aBuffer, offset: 0, index: 4)
+            enc1.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 5)
+            enc1.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 6)
+            enc1.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
+            enc1.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 8)
+            enc1.dispatchThreadgroups(gridSize, threadsPerThreadgroup: tgSize)
+            enc1.endEncoding()
 
             let enc2 = commandBuffer.makeComputeCommandEncoder()!
-            enc2.setComputePipelineState(partialPipeline)
-            enc2.setBuffer(xBuffer, offset: 0, index: 0)
-            enc2.setBuffer(aBuffer, offset: 0, index: 1)
-            enc2.setBuffer(pcBuffer, offset: 0, index: 2)
-            enc2.setBuffer(pnBuffer, offset: 0, index: 3)
-            enc2.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 4)
-            enc2.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 5)
-            enc2.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 6)
-            enc2.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
-            enc2.setBytes(&csU, length: MemoryLayout<UInt32>.stride, index: 8)
-            enc2.setBytes(&bkU, length: MemoryLayout<UInt32>.stride, index: 9)
-            enc2.dispatchThreadgroups(partialGrid, threadsPerThreadgroup: tgSize)
+            enc2.setComputePipelineState(combineNormPipeline)
+            enc2.setBuffer(pcBuffer!, offset: 0, index: 0)
+            enc2.setBuffer(pnBuffer!, offset: 0, index: 1)
+            enc2.setBuffer(cBuffer, offset: 0, index: 2)
+            enc2.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc2.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
+            enc2.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 5)
+            enc2.dispatchThreadgroups(MTLSize(width: d, height: k, depth: 1),
+                                      threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
             enc2.endEncoding()
-
-            clusterStart += batchK
         }
+    } else {
+        // Fallback: separate assign + batched partial_sum for large k or high-D
+        guard let assignPipeline = ctx.getPipeline(
+                name: "kmeans_assign", functionName: "kmeans_assign"),
+              let partialPipeline = ctx.getPipeline(
+                name: "kmeans_partial_sum", functionName: "kmeans_partial_sum"),
+              let combineNormPipeline = ctx.getPipeline(
+                name: "kmeans_combine_normalize", functionName: "kmeans_combine_normalize"),
+              let buf1 = ctx.reusableBuffer(length: pcSize),
+              let buf2 = ctx.reusableBuffer(length: pnSize) else {
+            return 1
+        }
+        pcBuffer = buf1
+        pnBuffer = buf2
 
-        // 3. Combine + normalize: reduce partials to new centroids
-        let enc3 = commandBuffer.makeComputeCommandEncoder()!
-        enc3.setComputePipelineState(combineNormPipeline)
-        enc3.setBuffer(pcBuffer, offset: 0, index: 0)
-        enc3.setBuffer(pnBuffer, offset: 0, index: 1)
-        enc3.setBuffer(cBuffer, offset: 0, index: 2)
-        enc3.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 3)
-        enc3.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
-        enc3.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 5)
-        enc3.dispatchThreadgroups(MTLSize(width: d, height: k, depth: 1),
-                                  threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
-        enc3.endEncoding()
+        var ngU = UInt32(numGroups)
+
+        // Max clusters per batch: limited by 28 KB threadgroup memory (7168 floats) + 256 uints
+        let maxBatchClusters = min(256, max(1, 7168 / d))
+
+        for _ in 0..<maxIter {
+            let clearEnc = commandBuffer.makeBlitCommandEncoder()!
+            clearEnc.fill(buffer: pcBuffer!, range: 0..<pcSize, value: 0)
+            clearEnc.fill(buffer: pnBuffer!, range: 0..<pnSize, value: 0)
+            clearEnc.endEncoding()
+
+            let enc1 = commandBuffer.makeComputeCommandEncoder()!
+            enc1.setComputePipelineState(assignPipeline)
+            enc1.setBuffer(xBuffer, offset: 0, index: 0)
+            enc1.setBuffer(cBuffer, offset: 0, index: 1)
+            enc1.setBuffer(aBuffer, offset: 0, index: 2)
+            enc1.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc1.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
+            enc1.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 5)
+            enc1.dispatchThreadgroups(MTLSize(width: n, height: 1, depth: 1), threadsPerThreadgroup: tgSize)
+            enc1.endEncoding()
+
+            var clusterStart = 0
+            while clusterStart < k {
+                let batchK = min(k - clusterStart, maxBatchClusters)
+                var csU = UInt32(clusterStart)
+                var bkU = UInt32(batchK)
+
+                let enc2 = commandBuffer.makeComputeCommandEncoder()!
+                enc2.setComputePipelineState(partialPipeline)
+                enc2.setBuffer(xBuffer, offset: 0, index: 0)
+                enc2.setBuffer(aBuffer, offset: 0, index: 1)
+                enc2.setBuffer(pcBuffer!, offset: 0, index: 2)
+                enc2.setBuffer(pnBuffer!, offset: 0, index: 3)
+                enc2.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 4)
+                enc2.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 5)
+                enc2.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 6)
+                enc2.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
+                enc2.setBytes(&csU, length: MemoryLayout<UInt32>.stride, index: 8)
+                enc2.setBytes(&bkU, length: MemoryLayout<UInt32>.stride, index: 9)
+                enc2.dispatchThreadgroups(gridSize, threadsPerThreadgroup: tgSize)
+                enc2.endEncoding()
+
+                clusterStart += batchK
+            }
+
+            let enc3 = commandBuffer.makeComputeCommandEncoder()!
+            enc3.setComputePipelineState(combineNormPipeline)
+            enc3.setBuffer(pcBuffer!, offset: 0, index: 0)
+            enc3.setBuffer(pnBuffer!, offset: 0, index: 1)
+            enc3.setBuffer(cBuffer, offset: 0, index: 2)
+            enc3.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc3.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
+            enc3.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 5)
+            enc3.dispatchThreadgroups(MTLSize(width: d, height: k, depth: 1),
+                                      threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+            enc3.endEncoding()
+        }
     }
 
     commandBuffer.commit()
     commandBuffer.waitUntilCompleted()
+
+    if let b1 = pcBuffer { ctx.recycleBuffer(b1) }
+    if let b2 = pnBuffer { ctx.recycleBuffer(b2) }
+
     return 0
 }
 

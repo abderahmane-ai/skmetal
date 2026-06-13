@@ -147,6 +147,79 @@ kernel void kmeans_normalize(
     }
 }
 
+// Fused assign + partial_accumulate in one dispatch (2 dispatches per iteration).
+// Each threadgroup zeros its OWN area of partial buffers (no per-iteration blit needed).
+// k * d must be <= 7168 (28 KB threadgroup memory) and k <= 256.
+// For larger problems, use separate kmeans_assign + batched kmeans_partial_sum.
+kernel void kmeans_assign_partial(
+    device const float* X [[buffer(0)]],
+    device const float* centroids [[buffer(1)]],
+    device float* partial_centroids [[buffer(2)]],
+    device uint* partial_counts [[buffer(3)]],
+    device uint* assignments [[buffer(4)]],
+    constant uint& n [[buffer(5)]],
+    constant uint& d [[buffer(6)]],
+    constant uint& k [[buffer(7)]],
+    constant uint& num_groups [[buffer(8)]],
+    uint tid [[thread_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]],
+    uint lsz [[threads_per_threadgroup]],
+    uint gid [[threadgroup_position_in_grid]]
+) {
+    uint kd = k * d;
+    uint total_threads = lsz * num_groups;
+
+    // Zero this group's area of the global partial buffers
+    uint pc_off = gid * k * d;
+    uint pn_off = gid * k;
+    for (uint i = lid; i < kd; i += lsz) partial_centroids[pc_off + i] = 0.0f;
+    if (lid < k) partial_counts[pn_off + lid] = 0;
+
+    threadgroup float accum[7168];
+    threadgroup uint accum_counts[256];
+    for (uint i = lid; i < kd; i += lsz) accum[i] = 0.0f;
+    if (lid < k) accum_counts[lid] = 0;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint i = tid; i < n; i += total_threads) {
+        float min_dist = FLT_MAX;
+        uint best_c = 0;
+        for (uint c = 0; c < k; ++c) {
+            float dist = 0.0f;
+            for (uint j = 0; j < d; ++j) {
+                float diff = X[i * d + j] - centroids[c * d + j];
+                dist += diff * diff;
+            }
+            if (dist < min_dist) { min_dist = dist; best_c = c; }
+        }
+        assignments[i] = best_c;
+
+        atomic_fetch_add_explicit(
+            (threadgroup atomic_uint*)&accum_counts[best_c], 1,
+            memory_order_relaxed);
+        for (uint j = 0; j < d; ++j) {
+            float x = X[i * d + j];
+            threadgroup atomic_int* a =
+                (threadgroup atomic_int*)&accum[best_c * d + j];
+            int expected = atomic_load_explicit(a, memory_order_relaxed);
+            int desired;
+            do {
+                desired = as_type<int>(as_type<float>(expected) + x);
+            } while (!atomic_compare_exchange_weak_explicit(
+                a, &expected, desired,
+                memory_order_relaxed, memory_order_relaxed));
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint i = lid; i < kd; i += lsz) {
+        partial_centroids[pc_off + i] = accum[i];
+    }
+    if (lid < k) {
+        partial_counts[pn_off + lid] = accum_counts[lid];
+    }
+}
+
 // Fused combine + normalize: sums partial sums across groups and divides by count.
 // Grid: (d, k), one thread per (centroid, feature).
 kernel void kmeans_combine_normalize(
