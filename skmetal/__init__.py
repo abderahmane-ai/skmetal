@@ -1,13 +1,16 @@
 import sys
 import importlib
+from pathlib import Path
 
 __version__ = "0.1.0"
 
-# ── Canonical import of the inner _config module ──────────────────────────
-# We import it by its canonical name (*.skmetal._config) and then alias it
-# under the top-level namespace so that ``import skmetal._config`` and
-# ``import skmetal.skmetal._config`` always refer to the *same* module
-# object (and therefore the same Config singleton).
+# Make the inner skmetal/skmetal/ directory discoverable as a submodule source
+# so that ``from skmetal.accelerate import accelerate`` resolves correctly.
+_inner = str(Path(__file__).resolve().parent / "skmetal")
+if _inner not in __path__:
+    __path__.append(_inner)
+
+# Canonical import of the inner _config module.
 _config_mod = importlib.import_module("skmetal.skmetal._config")
 sys.modules["skmetal._config"] = _config_mod
 

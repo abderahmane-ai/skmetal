@@ -11,15 +11,17 @@ def _find_library() -> str:
         Path(__file__).parent.parent / "skmetal_bridge" / ".build" / "release" / "libSkMetalBridge.dylib",
         Path(__file__).parent / "libSkMetalBridge.dylib",
         Path(__file__).parent / "libSkMetalBridgeC.dylib",
+        Path.home() / ".local" / "lib" / "libSkMetalBridge.dylib",
+        Path.home() / ".local" / "lib" / "libSkMetalBridgeC.dylib",
     ]
     for p in search_paths:
         if p.exists():
             return str(p.resolve())
     raise RuntimeError(
         "SkMetalBridge dylib not found. Build the Swift package first:\n"
-        "  cd skmetal_bridge && swift build --configuration release"
+        "  cd skmetal_bridge && swift build --configuration release\n"
+        "Then copy the dylib to ~/.local/lib/ or run: skmetal_bridge/build.sh"
     )
-
 
 _lib = ctypes.CDLL(_find_library())
 
