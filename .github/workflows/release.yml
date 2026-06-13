@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build:
@@ -111,12 +112,10 @@ jobs:
           python -m build --sdist --outdir dist/
 
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
-          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
-        run: |
-          pip install twine
-          twine upload dist/*.whl dist/*.tar.gz --skip-existing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
