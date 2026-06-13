@@ -30,13 +30,22 @@ final class MetalContext: @unchecked Sendable {
     }
 
     private static func compileLibrary(device: MTLDevice) -> MTLLibrary {
-        // Runtime compilation — most portable, avoids metallib path issues
-        do {
-            let lib = try device.makeLibrary(source: MetalSource.all, options: nil)
-            return lib
-        } catch {
-            fatalError("Failed to compile Metal library: \(error)")
+        // Try precompiled .metallib first
+        let metallibName = "SkMetalBridge"
+        let searchURLs: [URL?] = [
+            Bundle.module.url(forResource: metallibName, withExtension: "metallib"),
+            Bundle.module.url(forResource: metallibName, withExtension: "metallib", subdirectory: "Kernels"),
+        ]
+        for case let url? in searchURLs {
+            do {
+                return try device.makeLibrary(URL: url)
+            } catch {}
         }
+
+        fatalError("""
+            SkMetalBridge.metallib not found. Run: cd skmetal/skmetal_bridge && ./compile_metal.sh
+            Searched Bundle.module and Kernels/ subdirectory.
+            """)
     }
 
     func getPipeline(name: String, functionName: String) -> MTLComputePipelineState? {

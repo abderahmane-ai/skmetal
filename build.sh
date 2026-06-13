@@ -3,7 +3,11 @@ set -euo pipefail
 
 # Build the Swift Metal bridge library and install it where Python can find it.
 
-cd "$(dirname "$0")"/skmetal/skmetal_bridge
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$REPO_ROOT/skmetal/skmetal_bridge"
+
+echo "==> Compiling Metal kernels..."
+"$REPO_ROOT/skmetal/skmetal_bridge/compile_metal.sh"
 
 echo "==> Building SkMetalBridge (release)..."
 swift build --configuration release
