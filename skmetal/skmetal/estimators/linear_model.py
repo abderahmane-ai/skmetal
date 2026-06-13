@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, sigmoid, ridge_fit, logreg_irls_fused, multinomial_irls_iter, fista_fit
+from .._bridge import gemm, ridge_fit, logreg_irls_fused, multinomial_irls_iter, fista_fit
 
 
 class MetalLinearRegression(BaseGPUEstimator):

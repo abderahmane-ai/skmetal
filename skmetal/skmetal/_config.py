@@ -60,8 +60,10 @@ def set_threshold(threshold: int) -> None:
 
 def set_dtype(dtype: str) -> None:
     with _lock:
-        if dtype not in ("float32", "float64"):
-            raise ValueError("dtype must be 'float32' or 'float64'")
+        if dtype == "float64":
+            raise ValueError("Only float32 is supported for GPU operations.")
+        if dtype != "float32":
+            raise ValueError("dtype must be 'float32'")
         _config.dtype = dtype
 
 

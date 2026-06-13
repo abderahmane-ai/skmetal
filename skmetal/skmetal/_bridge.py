@@ -703,7 +703,13 @@ def compute_mindists(X: np.ndarray, centroids: np.ndarray, assignments: np.ndarr
 def ridge_fit(X: np.ndarray, y: np.ndarray,
                XTX: np.ndarray, XTy: np.ndarray,
                X_mean: np.ndarray) -> None:
-    """GPU: center X in-place + compute X^T X + X^T y in one command buffer."""
+    """GPU: center X in-place + compute X^T X + X^T y in one command buffer.
+
+    .. warning::
+       The input array ``X`` is **modified in-place**: its columns are
+       mean-centered as a side effect of computing X^T X. Pass a copy
+       if you need to preserve the original ``X``.
+    """
     n, p = X.shape
     err = _lib.skmetal_ridge_fit(
         X.ctypes.data, y.ctypes.data,

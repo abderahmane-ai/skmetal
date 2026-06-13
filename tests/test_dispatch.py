@@ -1,9 +1,7 @@
 """Tests for estimator dispatch logic."""
 
-import pytest
-from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import skmetal
 from skmetal._dispatch import _is_supported, _wrap_estimator, _wrap_pipeline

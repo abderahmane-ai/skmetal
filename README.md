@@ -10,7 +10,7 @@
 [![Swift](https://img.shields.io/badge/swift-6.1-F05138?logo=swift&style=flat-square)]()
 [![Metal](https://img.shields.io/badge/metal-3%2F4-00BFFF?style=flat-square)]()
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square)]()
-[![Estimators](https://img.shields.io/badge/estimators-7-blue?style=flat-square)]()
+[![Estimators](https://img.shields.io/badge/estimators-17-blue?style=flat-square)]()
 
 ```python
 import skmetal
@@ -111,13 +111,23 @@ with skmetal.accelerate_context():
 
 | Estimator | GPU Strategy | Speedup |
 |-----------|-------------|---------|
-| `StandardScaler` | Fused `scaler_fit` (Welford, 1 dispatch) | **8.27x** |
 | `LinearRegression` | Normal equations via MPS GEMM | **5.93x** |
 | `Ridge` | Fused centering + XTX + XTy (1 dispatch) | **1.16x** |
-| `TruncatedSVD` | Randomized SVD, no centering (all BLAS-3) | **2.53x** |
 | `LogisticRegression` | IRLS (3-5 Newton iterations, fused) | 0.91x |
-| `KMeans` | 2-dispatch pipeline (assign + combine/normalize) | 0.69x |
-| `MinMaxScaler` | `column_minmax` (threadgroup tree reduction) | -- |
+| `Lasso` | Coordinate descent + GPU residual updates | -- |
+| `ElasticNet` | Coordinate descent + GPU residual updates | -- |
+| `TruncatedSVD` | Randomized SVD, no centering (all BLAS-3) | **2.53x** |
+| `KMeans` | Single fused command buffer (all iterations on GPU) | 0.69x |
+| `DBSCAN` | GPU pairwise distance + per-point neighbor counting | -- |
+| `GaussianNB` | GPU mean/var per class | -- |
+| `StandardScaler` | Fused Welford (1 dispatch) | **8.27x** |
+| `MinMaxScaler` | Column min/max with threadgroup tree reduction | -- |
+| `RobustScaler` | GPU quantile approximation | -- |
+| `KNeighborsClassifier` | GPU pairwise distance + fused voting | -- |
+| `KNeighborsRegressor` | GPU pairwise distance + fused averaging | -- |
+| `NearestNeighbors` | GPU pairwise distance + index | -- |
+| `HistGradientBoostingRegressor` | C++ HGBT from sklearn (no custom GPU) | -- |
+| `HistGradientBoostingClassifier` | C++ HGBT from sklearn (no custom GPU) | -- |
 
 Estimators below 1.0x speedup are dispatch-limited at n <= 50K. Speedup improves to 2-5x at n >= 500K where compute dominates overhead.
 
@@ -160,11 +170,15 @@ skmetal/
     _dispatch.py         estimator registry + wrapping
     accelerate.py        @accelerate decorator + accelerate_context
     estimators/
-      linear_model.py    LinearRegression, Ridge, LogisticRegression
-      cluster.py         KMeans
+      _base.py           BaseGPUEstimator abstract class
+      _registry.py       Estimator registry (17 estimators)
+      linear_model.py    LinearRegression, Ridge, LogisticRegression, Lasso, ElasticNet
+      cluster.py         KMeans, DBSCAN
       decomposition.py   TruncatedSVD
-      preprocessing.py   StandardScaler, MinMaxScaler
-    kernels/             Python bridge call wrappers
+      ensemble.py        HistGradientBoostingRegressor, HistGradientBoostingClassifier
+      naive_bayes.py     GaussianNB
+      neighbors.py       KNeighborsClassifier, KNeighborsRegressor, NearestNeighbors
+      preprocessing.py   StandardScaler, MinMaxScaler, RobustScaler
     utils.py
   skmetal_bridge/        Swift + Metal
     Sources/SkMetalBridge/
@@ -179,7 +193,6 @@ skmetal/
   tests/
     test_correctness.py  8 correctness tests
     test_dispatch.py     7 dispatch tests
-    test_fallback.py     6 fallback tests
   build.sh
   pyproject.toml
   .github/workflows/
@@ -195,7 +208,6 @@ skmetal/
 ```
 test_correctness: 8/8 pass - all GPU estimators match sklearn CPU
 test_dispatch:    6/7 pass - registry, wrapping, pipeline, decorator
-test_fallback:    6/6 pass - CPU fallback, threshold, dtype handling
 ```
 
 ---

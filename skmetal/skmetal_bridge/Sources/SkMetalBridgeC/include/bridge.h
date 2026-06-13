@@ -46,6 +46,7 @@ int skmetal_compute_mindists(const void* X, const void* centroids, const void* a
 
 int skmetal_center_columns(void* X, const void* mean, size_t n, size_t d);
 
+/* NOTE: X buffer is mean-centered in-place as a side effect. */
 int skmetal_ridge_fit(void* X, const void* y, void* XTX, void* XTy, void* X_mean_out, size_t n, size_t p);
 
 int skmetal_logreg_irls_iter(const void* X, const void* y, const void* w, float b, void* linear, void* weight, void* X_scaled, void* Hessian, void* gradient, size_t n, size_t p);
