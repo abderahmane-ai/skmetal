@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, sigmoid, ridge_fit, logreg_irls_iter, multinomial_irls_iter, fista_fit
+from .._bridge import gemm, sigmoid, ridge_fit, logreg_irls_fused, multinomial_irls_iter, fista_fit
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -192,6 +192,7 @@ class MetalLogisticRegression(BaseGPUEstimator):
             Xe = X
             pe = p
 
+        # y already float32 from _validate_data (GPU reads as float32)
         w = np.zeros(pe, dtype=np.float32)
 
         # Pre-allocate temp buffers (reused across iterations)
@@ -202,9 +203,10 @@ class MetalLogisticRegression(BaseGPUEstimator):
         gradient = np.empty(pe, dtype=np.float32)
 
         for it in range(max_iter):
-            logreg_irls_iter(Xe, y, w, 0.0, linear, weight, X_scaled, Hessian, gradient)
+            # GPU: fused IRLS iteration (5 dispatches, was 8)
+            logreg_irls_fused(Xe, y, w, 0.0, linear, weight, X_scaled, Hessian, gradient)
 
-            # Add L2 regularization
+            # CPU: L2 regularization + Cholesky solve (zero-copy, no transfer cost)
             if alpha > 0:
                 Hessian[np.diag_indices_from(Hessian)] += alpha
                 gradient += alpha * w
@@ -283,6 +285,8 @@ class MetalLogisticRegression(BaseGPUEstimator):
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_predict(X)
         scores = X @ self._estimator.coef_.T + self._estimator.intercept_
+        if scores.shape[1] == 1:
+            return self._estimator.classes_[(scores.ravel() > 0).astype(int)]
         return self._estimator.classes_[np.argmax(scores, axis=1)]
 
     def predict_proba(self, X):

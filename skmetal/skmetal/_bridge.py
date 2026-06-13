@@ -158,6 +158,38 @@ _lib.skmetal_logreg_irls_iter.argtypes = [
 ]
 _lib.skmetal_logreg_irls_iter.restype = ctypes.c_int
 
+_lib.skmetal_logreg_irls_fused.argtypes = [
+    ctypes.c_void_p,  # X (n×p)
+    ctypes.c_void_p,  # y (n)
+    ctypes.c_void_p,  # w (p)
+    ctypes.c_float,   # b (scalar bias)
+    ctypes.c_void_p,  # linear (n, temp)
+    ctypes.c_void_p,  # weight (n, temp)
+    ctypes.c_void_p,  # X_scaled (n×p, temp)
+    ctypes.c_void_p,  # Hessian (p×p, output)
+    ctypes.c_void_p,  # gradient (p, output)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # p
+]
+_lib.skmetal_logreg_irls_fused.restype = ctypes.c_int
+
+_lib.skmetal_logreg_irls_fused_solve.argtypes = [
+    ctypes.c_void_p,  # X (n×p)
+    ctypes.c_void_p,  # y (n)
+    ctypes.c_void_p,  # w (p)
+    ctypes.c_float,   # b (scalar bias)
+    ctypes.c_void_p,  # linear (n, temp)
+    ctypes.c_void_p,  # weight (n, temp)
+    ctypes.c_void_p,  # X_scaled (n×p, temp)
+    ctypes.c_void_p,  # Hessian (p×p, output)
+    ctypes.c_void_p,  # gradient (p, output)
+    ctypes.c_void_p,  # delta (p, output — Newton step)
+    ctypes.c_float,   # alpha (L2 regularization)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # p
+]
+_lib.skmetal_logreg_irls_fused_solve.restype = ctypes.c_int
+
 _lib.skmetal_kmeans_batch_fused.argtypes = [
     ctypes.c_void_p,  # X (n×d)
     ctypes.c_void_p,  # centroids (k×d, in/out)
@@ -585,7 +617,7 @@ def kmeans_combine_normalize(partial_centroids: np.ndarray, partial_counts: np.n
 
 
 def logreg_irls_iter(X, y, w, b, linear, weight, X_scaled, Hessian, gradient):
-    """GPU: one fused IRLS iteration (X@w + b → sigmoid → Hessian + grad) in one command buffer."""
+    """GPU: one IRLS iteration (X@w + b → sigmoid → Hessian + grad), 8 dispatches."""
     n, p = X.shape
     err = _lib.skmetal_logreg_irls_iter(
         X.ctypes.data, y.ctypes.data, w.ctypes.data,
@@ -596,6 +628,51 @@ def logreg_irls_iter(X, y, w, b, linear, weight, X_scaled, Hessian, gradient):
     )
     if err != 0:
         raise RuntimeError(f"logreg_irls_iter failed with code {err}")
+
+
+def logreg_irls_fused(X, y, w, b, linear, weight, X_scaled, Hessian, gradient):
+    """GPU: fused IRLS iteration (5 dispatches, was 8) — no solve.
+    
+    Fused kernels:
+      compute_linear_irls: add_scalar + sigmoid + irls_weight → prob + weight
+      compute_error_scale: subtract + scale_rows → error + X_scaled
+    
+    After this call:
+      linear = error (prob - y)
+      weight = sqrt(prob * (1-prob))
+      X_scaled = X * weight
+      Hessian = X_scaled^T @ X_scaled
+      gradient = X^T @ error
+    """
+    n, p = X.shape
+    err = _lib.skmetal_logreg_irls_fused(
+        X.ctypes.data, y.ctypes.data, w.ctypes.data,
+        ctypes.c_float(b),
+        linear.ctypes.data, weight.ctypes.data, X_scaled.ctypes.data,
+        Hessian.ctypes.data, gradient.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(p),
+    )
+    if err != 0:
+        raise RuntimeError(f"logreg_irls_fused failed with code {err}")
+
+
+def logreg_irls_fused_solve(X, y, w, b, linear, weight, X_scaled, Hessian, gradient, delta, alpha):
+    """GPU: fused IRLS + L2 + Cholesky solve (all in one command buffer).
+    
+    Best for large p (p >= 500). For small p, use logreg_irls_fused + CPU solve.
+    """
+    n, p = X.shape
+    err = _lib.skmetal_logreg_irls_fused_solve(
+        X.ctypes.data, y.ctypes.data, w.ctypes.data,
+        ctypes.c_float(b),
+        linear.ctypes.data, weight.ctypes.data, X_scaled.ctypes.data,
+        Hessian.ctypes.data, gradient.ctypes.data,
+        delta.ctypes.data,
+        ctypes.c_float(alpha),
+        ctypes.c_size_t(n), ctypes.c_size_t(p),
+    )
+    if err != 0:
+        raise RuntimeError(f"logreg_irls_fused_solve failed with code {err}")
 
 
 def kmeans_batch_fused(X, centroids, assignments,

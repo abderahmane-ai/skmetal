@@ -866,14 +866,14 @@ public func skmetal_logreg_irls_iter(
 
     let rowBytesX = p * MemoryLayout<Float>.stride
     let rowBytesH = p * MemoryLayout<Float>.stride
+    let colBytes = MemoryLayout<Float>.stride
 
     let descX = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
-    let descW = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: MemoryLayout<Float>.stride, dataType: .float32)
-    let descLin = MPSMatrixDescriptor(dimensions: n, columns: 1, rowBytes: MemoryLayout<Float>.stride, dataType: .float32)
+    let descW = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: colBytes, dataType: .float32)
+    let descLin = MPSMatrixDescriptor(dimensions: n, columns: 1, rowBytes: colBytes, dataType: .float32)
     let descXS = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
     let descH = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytesH, dataType: .float32)
-    let descG = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: MemoryLayout<Float>.stride, dataType: .float32)
-    let descY = MPSMatrixDescriptor(dimensions: n, columns: 1, rowBytes: MemoryLayout<Float>.stride, dataType: .float32)
+    let descG = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: colBytes, dataType: .float32)
 
     let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
     let matrixW = MPSMatrix(buffer: wBuffer, descriptor: descW)
@@ -881,7 +881,6 @@ public func skmetal_logreg_irls_iter(
     let matrixXS = MPSMatrix(buffer: xsBuffer, descriptor: descXS)
     let matrixH = MPSMatrix(buffer: hBuffer, descriptor: descH)
     let matrixG = MPSMatrix(buffer: gBuffer, descriptor: descG)
-    let matrixY = MPSMatrix(buffer: yBuffer, descriptor: descY)
 
     let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
 
@@ -978,6 +977,278 @@ public func skmetal_logreg_irls_iter(
 
     commandBuffer.commit()
     commandBuffer.waitUntilCompleted()
+    return 0
+}
+
+// MARK: - Fused IRLS iteration with GPU Cholesky solve (BINARY)
+
+@_cdecl("skmetal_logreg_irls_fused_solve")
+public func skmetal_logreg_irls_fused_solve(
+    X: UnsafeRawPointer,
+    y: UnsafeRawPointer,
+    w: UnsafeRawPointer,
+    b: Float,
+    linear: UnsafeMutableRawPointer,
+    weight: UnsafeMutableRawPointer,
+    X_scaled: UnsafeMutableRawPointer,
+    Hessian: UnsafeMutableRawPointer,
+    gradient: UnsafeMutableRawPointer,
+    delta: UnsafeMutableRawPointer,
+    alpha: Float,
+    n: Int,
+    p: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let fs = MemoryLayout<Float>.stride
+    let nSize = n * fs
+    let pSize = p * fs
+    let xSize = n * p * fs
+    let hessianSize = p * p * fs
+
+    guard let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
+          let yBuffer = wrapInput(y, length: nSize, device: ctx.device),
+          let wBuffer = wrapInput(w, length: pSize, device: ctx.device),
+          let linearBuffer = wrapOutput(linear, length: nSize, device: ctx.device),
+          let weightBuffer = wrapOutput(weight, length: nSize, device: ctx.device),
+          let xsBuffer = wrapOutput(X_scaled, length: xSize, device: ctx.device),
+          let hBuffer = wrapOutput(Hessian, length: hessianSize, device: ctx.device),
+          let gBuffer = wrapOutput(gradient, length: pSize, device: ctx.device),
+          let dBuffer = wrapOutput(delta, length: pSize, device: ctx.device) else {
+        return 1
+    }
+
+    // GPU-resident temp: L factor (p×p)
+    guard let lBuffer = ctx.device.makeBuffer(length: hessianSize, options: .storageModeShared) else {
+        return 1
+    }
+
+    let rowBytesX = p * fs
+    let rowBytesH = p * fs
+
+    let descX = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
+    let descW = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: fs, dataType: .float32)
+    let descLin = MPSMatrixDescriptor(dimensions: n, columns: 1, rowBytes: fs, dataType: .float32)
+    let descXS = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
+    let descH = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytesH, dataType: .float32)
+    let descG = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: fs, dataType: .float32)
+    let descL = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytesH, dataType: .float32)
+
+    let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
+    let matrixW = MPSMatrix(buffer: wBuffer, descriptor: descW)
+    let matrixLin = MPSMatrix(buffer: linearBuffer, descriptor: descLin)
+    let matrixXS = MPSMatrix(buffer: xsBuffer, descriptor: descXS)
+    let matrixH = MPSMatrix(buffer: hBuffer, descriptor: descH)
+    let matrixG = MPSMatrix(buffer: gBuffer, descriptor: descG)
+    let matrixL = MPSMatrix(buffer: lBuffer, descriptor: descL)
+    let matrixD = MPSMatrix(buffer: dBuffer, descriptor: descG)
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+
+    // Step 1: X @ w → linear (n×1)
+    let gemmXW = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: false, transposeRight: false,
+        resultRows: n, resultColumns: 1, interiorColumns: p,
+        alpha: 1.0, beta: 0.0)
+    gemmXW.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
+
+    // Step 2: fused linear += b → sigmoid → irls_weight → prob + weight
+    if let pipeline = ctx.getPipeline(name: "compute_linear_irls", functionName: "compute_linear_irls") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(linearBuffer, offset: 0, index: 0)
+        enc.setBuffer(weightBuffer, offset: 0, index: 1)
+        var bScalar = b
+        enc.setBytes(&bScalar, length: fs, index: 2)
+        var nU = UInt32(n)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+
+    // Step 3: fused error = prob - y + scale_rows(X, weight, X_scaled)
+    if let pipeline = ctx.getPipeline(name: "compute_error_scale", functionName: "compute_error_scale") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(linearBuffer, offset: 0, index: 0)  // prob
+        enc.setBuffer(yBuffer, offset: 0, index: 1)        // y
+        enc.setBuffer(xBuffer, offset: 0, index: 2)         // X
+        enc.setBuffer(weightBuffer, offset: 0, index: 3)    // weights
+        enc.setBuffer(linearBuffer, offset: 0, index: 4)    // error (reuse linear buffer, now error)
+        enc.setBuffer(xsBuffer, offset: 0, index: 5)        // X_scaled
+        var nU = UInt32(n); var pU = UInt32(p)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 6)
+        enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 7)
+        enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+
+    // Step 4: X_scaled^T @ X_scaled → Hessian (p×p)
+    let gemmHH = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: p, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    gemmHH.encode(commandBuffer: cb, leftMatrix: matrixXS, rightMatrix: matrixXS, resultMatrix: matrixH)
+
+    // Step 5: X^T @ error → gradient (p×1)
+    let gemmGrad = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: 1, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    gemmGrad.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixLin, resultMatrix: matrixG)
+
+    // Step 6: L2 regularization on GPU (if alpha > 0)
+    if alpha != 0 {
+        if let pipeline = ctx.getPipeline(name: "l2_reg_irls", functionName: "l2_reg_irls") {
+            let enc = cb.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(pipeline)
+            enc.setBuffer(hBuffer, offset: 0, index: 0)
+            enc.setBuffer(gBuffer, offset: 0, index: 1)
+            enc.setBuffer(wBuffer, offset: 0, index: 2)
+            var a = alpha
+            enc.setBytes(&a, length: fs, index: 3)
+            var pU = UInt32(p)
+            enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 4)
+            enc.dispatchThreads(MTLSize(width: p, height: 1, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+    }
+
+    // Step 7: Cholesky decomposition: Hessian ≈ L × L^T (L = lower triangular)
+    // MPSMatrixDecompositionCholesky does NOT modify sourceMatrix (Hessian)
+    let cholesky = MPSMatrixDecompositionCholesky(
+        device: ctx.device, lower: true, order: p)
+    cholesky.encode(commandBuffer: cb,
+                    sourceMatrix: matrixH,
+                    resultMatrix: matrixL,
+                    status: nil)
+
+    // Step 8: Solve H × delta = gradient using Cholesky factor L
+    // Equivalent to: L × (L^T × delta) = gradient → delta
+    let solveChol = MPSMatrixSolveCholesky(
+        device: ctx.device, upper: false, order: p,
+        numberOfRightHandSides: 1)
+    solveChol.encode(commandBuffer: cb,
+                     sourceMatrix: matrixL,
+                     rightHandSideMatrix: matrixG,
+                     solutionMatrix: matrixD)
+
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
+// MARK: - Fused IRLS iteration (no solve — 5 dispatches, was 8)
+
+@_cdecl("skmetal_logreg_irls_fused")
+public func skmetal_logreg_irls_fused(
+    X: UnsafeRawPointer,
+    y: UnsafeRawPointer,
+    w: UnsafeRawPointer,
+    b: Float,
+    linear: UnsafeMutableRawPointer,
+    weight: UnsafeMutableRawPointer,
+    X_scaled: UnsafeMutableRawPointer,
+    Hessian: UnsafeMutableRawPointer,
+    gradient: UnsafeMutableRawPointer,
+    n: Int,
+    p: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let fs = MemoryLayout<Float>.stride
+    let nSize = n * fs
+    let pSize = p * fs
+    let xSize = n * p * fs
+    let hessianSize = p * p * fs
+
+    guard let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
+          let yBuffer = wrapInput(y, length: nSize, device: ctx.device),
+          let wBuffer = wrapInput(w, length: pSize, device: ctx.device),
+          let linearBuffer = wrapOutput(linear, length: nSize, device: ctx.device),
+          let weightBuffer = wrapOutput(weight, length: nSize, device: ctx.device),
+          let xsBuffer = wrapOutput(X_scaled, length: xSize, device: ctx.device),
+          let hBuffer = wrapOutput(Hessian, length: hessianSize, device: ctx.device),
+          let gBuffer = wrapOutput(gradient, length: pSize, device: ctx.device) else {
+        return 1
+    }
+
+    let rowBytesX = p * fs
+    let rowBytesH = p * fs
+
+    let descX = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
+    let descW = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: fs, dataType: .float32)
+    let descLin = MPSMatrixDescriptor(dimensions: n, columns: 1, rowBytes: fs, dataType: .float32)
+    let descXS = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
+    let descH = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytesH, dataType: .float32)
+    let descG = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: fs, dataType: .float32)
+
+    let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
+    let matrixW = MPSMatrix(buffer: wBuffer, descriptor: descW)
+    let matrixLin = MPSMatrix(buffer: linearBuffer, descriptor: descLin)
+    let matrixXS = MPSMatrix(buffer: xsBuffer, descriptor: descXS)
+    let matrixH = MPSMatrix(buffer: hBuffer, descriptor: descH)
+    let matrixG = MPSMatrix(buffer: gBuffer, descriptor: descG)
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+
+    // Step 1: X @ w → linear (n×1)
+    let gemmXW = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: false, transposeRight: false,
+        resultRows: n, resultColumns: 1, interiorColumns: p,
+        alpha: 1.0, beta: 0.0)
+    gemmXW.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
+
+    // Step 2: fused linear += b → sigmoid → irls_weight → prob + weight
+    if let pipeline = ctx.getPipeline(name: "compute_linear_irls", functionName: "compute_linear_irls") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(linearBuffer, offset: 0, index: 0)
+        enc.setBuffer(weightBuffer, offset: 0, index: 1)
+        var bScalar = b
+        enc.setBytes(&bScalar, length: fs, index: 2)
+        var nU = UInt32(n)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+
+    // Step 3: fused error = prob - y + scale_rows(X, weight, X_scaled)
+    if let pipeline = ctx.getPipeline(name: "compute_error_scale", functionName: "compute_error_scale") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(linearBuffer, offset: 0, index: 0)
+        enc.setBuffer(yBuffer, offset: 0, index: 1)
+        enc.setBuffer(xBuffer, offset: 0, index: 2)
+        enc.setBuffer(weightBuffer, offset: 0, index: 3)
+        enc.setBuffer(linearBuffer, offset: 0, index: 4)
+        enc.setBuffer(xsBuffer, offset: 0, index: 5)
+        var nU = UInt32(n); var pU = UInt32(p)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 6)
+        enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 7)
+        enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+
+    // Step 4: X_scaled^T @ X_scaled → Hessian (p×p)
+    let gemmHH = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: p, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    gemmHH.encode(commandBuffer: cb, leftMatrix: matrixXS, rightMatrix: matrixXS, resultMatrix: matrixH)
+
+    // Step 5: X^T @ error → gradient (p×1)
+    let gemmGrad = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: 1, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    gemmGrad.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixLin, resultMatrix: matrixG)
+
+    cb.commit()
+    cb.waitUntilCompleted()
     return 0
 }
 
@@ -2695,6 +2966,9 @@ public func skmetal_warmup() -> Int32 {
         ("softmax_normalize_residual", "softmax_normalize_residual"),
         ("negate", "negate"),
         ("multinomial_hessians", "multinomial_hessians"),
+        ("compute_linear_irls", "compute_linear_irls"),
+        ("compute_error_scale", "compute_error_scale"),
+        ("l2_reg_irls", "l2_reg_irls"),
     ]
 
     let cb = ctx.commandQueue.makeCommandBuffer()!

@@ -4,8 +4,8 @@ using namespace metal;
 // Compute IRLS weight: w[i] = sqrt(p[i] * (1 - p[i]))
 // Stable: clamps p to [eps, 1-eps] to avoid divide-by-zero.
 kernel void irls_weight(
-    device const float* p [[buffer(0)]],      // probabilities (n,)
-    device float* weights [[buffer(1)]],       // output: sqrt(p*(1-p))
+    device const float* p [[buffer(0)]],
+    device float* weights [[buffer(1)]],
     constant uint& n [[buffer(2)]],
     uint tid [[thread_position_in_grid]]
 ) {
@@ -29,6 +29,63 @@ kernel void scale_rows(
     uint i = tid / d;
     uint j = tid % d;
     output[tid] = X[tid] * weights[i];
+}
+
+// Fused: linear += b → sigmoid → irls_weight, in one dispatch.
+// Input: linear = X@w (raw scores)
+// Output: linear = sigmoid(linear + b)  (probabilities)
+// Output: weights = sqrt(prob * (1 - prob))
+kernel void compute_linear_irls(
+    device float* linear [[buffer(0)]],
+    device float* weights [[buffer(1)]],
+    constant float& b [[buffer(2)]],
+    constant uint& n [[buffer(3)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    float val = linear[tid] + b;
+    val = clamp(val, -100.0f, 100.0f);
+    float prob = 1.0f / (1.0f + exp(-val));
+    linear[tid] = prob;
+    prob = clamp(prob, 1e-7f, 1.0f - 1e-7f);
+    weights[tid] = sqrt(prob * (1.0f - prob));
+}
+
+// Fused: error = prob - y + scale rows of X by weight.
+// Each thread handles one row: computes the error, then scales all p columns.
+// Much better cache locality than separate subtract + scale_rows dispatches.
+kernel void compute_error_scale(
+    device const float* prob [[buffer(0)]],
+    device const float* y [[buffer(1)]],
+    device const float* X [[buffer(2)]],
+    device const float* weights [[buffer(3)]],
+    device float* error [[buffer(4)]],
+    device float* X_scaled [[buffer(5)]],
+    constant uint& n [[buffer(6)]],
+    constant uint& p [[buffer(7)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    error[tid] = prob[tid] - y[tid];
+    float w = weights[tid];
+    uint base = tid * p;
+    for (uint j = 0; j < p; j++) {
+        X_scaled[base + j] = X[base + j] * w;
+    }
+}
+
+// L2 regularization: Hessian[i,i] += alpha, gradient[i] += alpha * w[i]
+kernel void l2_reg_irls(
+    device float* Hessian [[buffer(0)]],
+    device float* gradient [[buffer(1)]],
+    device const float* w [[buffer(2)]],
+    constant float& alpha [[buffer(3)]],
+    constant uint& p [[buffer(4)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= p) return;
+    Hessian[tid * p + tid] += alpha;
+    gradient[tid] += alpha * w[tid];
 }
 
 // Compute all C multinomial Hessians in one dispatch.
