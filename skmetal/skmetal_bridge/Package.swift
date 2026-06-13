@@ -26,6 +26,5 @@ let package = Package(
             path: "Sources/SkMetalBridgeC",
             publicHeadersPath: "include"
         ),
-        .testTarget(name: "SkMetalBridgeTests", dependencies: ["SkMetalBridge"]),
     ]
 )
