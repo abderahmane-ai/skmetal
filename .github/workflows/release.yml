@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -22,6 +22,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Set up Swift 6.1
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.1"
 
       - name: Compile Metal kernels
         run: |
@@ -59,7 +64,7 @@ jobs:
 
   publish:
     needs: build
-    runs-on: macos-14
+    runs-on: macos-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
@@ -69,6 +74,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Set up Swift 6.1
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.1"
 
       - name: Download all wheels
         uses: actions/download-artifact@v4
@@ -81,6 +91,18 @@ jobs:
           cd skmetal/skmetal_bridge
           bash compile_metal.sh
           swift build --configuration release
+
+      - name: Copy artifacts into Python package
+        run: |
+          DYLIB="skmetal/skmetal_bridge/.build/arm64-apple-macosx/release/libSkMetalBridge.dylib"
+          if [ ! -f "$DYLIB" ]; then
+            DYLIB="skmetal/skmetal_bridge/.build/release/libSkMetalBridge.dylib"
+          fi
+          cp "$DYLIB" skmetal/skmetal/libSkMetalBridge.dylib
+          BUNDLE="skmetal/skmetal_bridge/.build/arm64-apple-macosx/release/SkMetalBridge_SkMetalBridge.bundle"
+          if [ -d "$BUNDLE" ]; then
+            cp -R "$BUNDLE" skmetal/skmetal/SkMetalBridge_SkMetalBridge.bundle
+          fi
 
       - name: Build sdist
         run: |
