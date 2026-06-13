@@ -56,8 +56,9 @@ class MetalPCA(BaseGPUEstimator):
             n_components = min(n_components, n_samples, n_features)
 
         mean = np.empty(n_features, dtype=np.float32)
+        var_out = np.empty(n_features, dtype=np.float32)
         Xc = np.ascontiguousarray(X, dtype=np.float32)
-        scaler_fit(Xc, mean, np.empty(n_features, dtype=np.float32))
+        scaler_fit(Xc, mean, var_out)
         center_columns(Xc, mean)
 
         m, n = Xc.shape
@@ -89,7 +90,7 @@ class MetalPCA(BaseGPUEstimator):
         self._estimator.n_samples_seen_ = n_samples
 
         explained_variance = (S.astype(np.float64) ** 2) / (n_samples - 1)
-        total_var = np.var(Xc, axis=0, ddof=1).sum()
+        total_var = (var_out * n_samples / (n_samples - 1)).sum()
         self._estimator.explained_variance_ = explained_variance
         self._estimator.explained_variance_ratio_ = explained_variance / total_var if total_var > 0 else explained_variance
         self._estimator.noise_variance_ = max(0, total_var - explained_variance.sum())

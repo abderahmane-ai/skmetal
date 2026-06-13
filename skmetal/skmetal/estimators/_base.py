@@ -25,8 +25,14 @@ class BaseGPUEstimator(BaseEstimator):
             return False
         if X.dtype != np.float32:
             return False
-        if X.shape[0] * X.shape[1] < config.threshold:
+        n, d = X.shape
+        if n * d < config.threshold:
             return False
+        name = type(self._estimator).__name__ if self._estimator else type(self).__name__
+        if name in config.thresholds:
+            min_rows, min_cols = config.thresholds[name]
+            if n < min_rows or d < min_cols:
+                return False
         return True
 
     def _fallback_fit(self, X, y, **kwargs):

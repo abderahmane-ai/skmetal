@@ -400,6 +400,7 @@ _lib.skmetal_sv_shortcut.restype = ctypes.c_int
 
 # Initialize on import
 _lib.skmetal_init()
+_lib.skmetal_warmup()
 
 
 # Python wrapper functions

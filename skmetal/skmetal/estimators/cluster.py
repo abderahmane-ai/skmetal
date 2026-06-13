@@ -4,8 +4,8 @@ from ._base import BaseGPUEstimator
 from .._bridge import (
     pairwise_distance,
     kmeans_assign,
-    kmeans_batch_fused,
     compute_mindists,
+    kmeans_batch_fused,
     sv_init, sv_hook, sv_shortcut,
 )
 
@@ -19,24 +19,57 @@ class MetalKMeans(BaseGPUEstimator):
         n, d = X.shape
         k = self._estimator.n_clusters
         max_iter = self._estimator.max_iter
+        tol = self._estimator.tol
+        n_init = self._estimator.n_init
+        if n_init == "auto":
+            n_init = 10 if n > 10000 else 5
 
-        centroids = self._kmeans_plusplus_init(X, k)
-        assignments = np.empty(n, dtype=np.uint32)
+        best_inertia = np.inf
+        best_centroids = None
+        best_assignments = None
+        rng = check_random_state(self._estimator.random_state)
         num_groups = max(1, (n + 255) // 256)
 
-        kmeans_batch_fused(X, centroids, assignments,
-                           n, d, k, num_groups, max_iter)
+        for _init_attempt in range(n_init):
+            centroids = self._kmeans_plusplus_init(X, k, rng)
+            centroids = np.ascontiguousarray(centroids, dtype=np.float32)
+            assignments = np.empty(n, dtype=np.uint32)
 
-        self._estimator.cluster_centers_ = centroids
-        self._estimator.labels_ = assignments.astype(np.int32)
-        self._estimator.inertia_ = self._compute_inertia(X, assignments, centroids)
-        self._estimator.n_iter_ = max_iter
+            actual_iters = self._run_kmeans_batched(
+                X, centroids, assignments, n, d, k, num_groups, max_iter, tol
+            )
+
+            diff = X - centroids[assignments]
+            inertia = float(np.sum(diff * diff))
+            if inertia < best_inertia:
+                best_inertia = inertia
+                best_centroids = centroids.copy()
+                best_assignments = assignments.copy()
+
+        self._estimator.cluster_centers_ = best_centroids
+        self._estimator.labels_ = best_assignments.astype(np.int32)
+        self._estimator.inertia_ = float(best_inertia)
+        self._estimator.n_iter_ = actual_iters
         self._estimator.n_features_in_ = d
         self._fitted = True
         return self
 
-    def _kmeans_plusplus_init(self, X, k):
-        rng = check_random_state(self._estimator.random_state)
+    def _run_kmeans_batched(self, X, centroids, assignments,
+                              n, d, k, num_groups, max_iter, tol):
+        batch_size = max(1, min(5, (max_iter + 9) // 10))
+        total_iters = 0
+        for batch_start in range(0, max_iter, batch_size):
+            remaining = min(batch_size, max_iter - batch_start)
+            old = centroids.copy()
+            kmeans_batch_fused(X, centroids, assignments,
+                               n, d, k, num_groups, remaining)
+            total_iters += remaining
+            shift = np.sqrt(np.square(centroids - old).sum(axis=1)).max()
+            if shift < tol:
+                break
+        return total_iters
+
+    def _kmeans_plusplus_init(self, X, k, rng):
         n, d = X.shape
         centroids = np.empty((k, d), dtype=np.float32)
         centroids[0] = X[rng.randint(n)]
@@ -52,10 +85,6 @@ class MetalKMeans(BaseGPUEstimator):
             probs = dists / dists.sum()
             centroids[i] = X[rng.choice(n, p=probs)]
         return centroids
-
-    def _compute_inertia(self, X, assignments, centroids):
-        diff = X - centroids[assignments]
-        return float(np.sum(diff * diff))
 
     def predict(self, X):
         X = self._validate_data(X)[0]
@@ -131,6 +160,10 @@ class MetalDBSCAN(BaseGPUEstimator):
         n, d = X.shape
         eps = self._estimator.eps
         min_samples = self._estimator.min_samples
+
+        # For high-D data, sklearn's tree-based DBSCAN is faster than GPU O(n²)
+        if d > 6:
+            return self._fallback_fit(X, y, **kwargs)
 
         D = pairwise_distance(X)
         eps_sq = eps * eps

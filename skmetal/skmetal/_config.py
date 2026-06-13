@@ -4,12 +4,38 @@ import threading
 from dataclasses import dataclass
 
 
+PER_ESTIMATOR_THRESHOLDS = {
+    "StandardScaler":    (1_000,   10),
+    "MinMaxScaler":      (500_000, 10),
+    "RobustScaler":      (100_000, 10),
+    "PCA":               (5_000,   20),
+    "TruncatedSVD":      (5_000,   20),
+    "Ridge":             (100_000, 50),
+    "Lasso":             (50_000,  50),
+    "ElasticNet":        (50_000,  50),
+    "LinearRegression":  (50_000,  50),
+    "LogisticRegression":(20_000,  20),
+    "KMeans":            (5_000,   5),
+    "DBSCAN":            (1_000,   2),
+    "KNeighborsClassifier":  (5_000,   10),
+    "KNeighborsRegressor":   (5_000,   10),
+    "HistGradientBoostingClassifier":   (10_000, 10),
+    "HistGradientBoostingRegressor":    (10_000, 10),
+    "GaussianNB":        (10_000,  10),
+}
+
+
 @dataclass
 class Config:
     device: str = "gpu"
-    threshold: int = 500_000
+    threshold: int = 1
     dtype: str = "float32"
     verbose: bool = False
+    thresholds: dict = None
+
+    def __post_init__(self):
+        if self.thresholds is None:
+            self.thresholds = dict(PER_ESTIMATOR_THRESHOLDS)
 
 
 _config = Config()
@@ -42,3 +68,13 @@ def set_dtype(dtype: str) -> None:
 def set_verbose(verbose: bool) -> None:
     with _lock:
         _config.verbose = bool(verbose)
+
+
+def set_thresholds(thresholds: dict) -> None:
+    with _lock:
+        _config.thresholds = dict(thresholds)
+
+
+def update_threshold(name: str, min_rows: int, min_cols: int) -> None:
+    with _lock:
+        _config.thresholds[name] = (min_rows, min_cols)

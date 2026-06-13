@@ -14,7 +14,7 @@ Usage:
     m.predict(X_test)
 """
 
-from ._config import get_config, set_device, set_threshold, set_dtype, set_verbose
+from ._config import get_config, set_device, set_threshold, set_dtype, set_verbose, set_thresholds, update_threshold
 from .accelerate import accelerate, accelerate_context
 from ._bridge import device_info
 
@@ -27,5 +27,7 @@ __all__ = [
     "set_threshold",
     "set_dtype",
     "set_verbose",
+    "set_thresholds",
+    "update_threshold",
     "device_info",
 ]

@@ -16,6 +16,8 @@ set_device = _config_mod.set_device
 set_threshold = _config_mod.set_threshold
 set_dtype = _config_mod.set_dtype
 set_verbose = _config_mod.set_verbose
+set_thresholds = _config_mod.set_thresholds
+update_threshold = _config_mod.update_threshold
 
 from .skmetal.accelerate import accelerate, accelerate_context
 from .skmetal._bridge import device_info
@@ -34,5 +36,7 @@ __all__ = [
     "set_threshold",
     "set_dtype",
     "set_verbose",
+    "set_thresholds",
+    "update_threshold",
     "device_info",
 ]
