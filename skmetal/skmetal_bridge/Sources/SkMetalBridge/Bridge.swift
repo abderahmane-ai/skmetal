@@ -1020,7 +1020,7 @@ public func skmetal_logreg_irls_fused_solve(
     }
 
     // GPU-resident temp: L factor (p×p)
-    guard let lBuffer = ctx.device.makeBuffer(length: hessianSize, options: .storageModeShared) else {
+    guard let lBuffer = ctx.device.makeBuffer(length: hessianSize, options: .storageModePrivate) else {
         return 1
     }
 

@@ -97,32 +97,29 @@ class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
             return self._fallback_predict_proba(X)
 
         distances, indices = self._kneighbors(X)
-        n_test = X.shape[0]
         k = self._k_neighbors
         classes = self._estimator.classes_
-        n_classes = len(classes)
 
         weights = getattr(self._estimator, "weights", "uniform")
 
-        proba = np.zeros((n_test, n_classes), dtype=np.float32)
+        # Resolve neighbor labels for all test instances simultaneously
+        # ravel() ensures indexing is safe even if _y is shape (n, 1)
+        neighbor_labels = self._estimator._y.ravel()[indices]  # shape (n_test, k)
+
+        # Broadcast comparison against classes (n_test, k, n_classes)
+        mask = (neighbor_labels[:, :, np.newaxis] == classes[np.newaxis, np.newaxis, :])
+
         if weights == "distance":
             d_safe = np.sqrt(np.maximum(distances, 1e-10))
             w = 1.0 / d_safe
-            for i in range(n_test):
-                neighbor_labels = self._estimator._y[indices[i]]
-                for j, lbl in enumerate(neighbor_labels):
-                    idx = np.where(classes == lbl)[0]
-                    if len(idx) > 0:
-                        proba[i, idx[0]] += w[i, j]
-                proba[i] /= proba[i].sum()
+            # Weighted vote: sum weights where mask is true
+            proba = (mask * w[:, :, np.newaxis]).sum(axis=1)
+            # Normalize probabilities per row
+            row_sums = proba.sum(axis=1, keepdims=True)
+            row_sums[row_sums == 0] = 1.0
+            proba /= row_sums
         else:
-            for i in range(n_test):
-                neighbor_labels = self._estimator._y[indices[i]]
-                for lbl in neighbor_labels:
-                    idx = np.where(classes == lbl)[0]
-                    if len(idx) > 0:
-                        proba[i, idx[0]] += 1.0
-                proba[i] /= k
+            proba = mask.sum(axis=1).astype(np.float32) / k
 
         return proba
 

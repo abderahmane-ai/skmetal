@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, ridge_fit, logreg_irls_fused, multinomial_irls_iter, fista_fit
+from .._bridge import gemm, ridge_fit, logreg_irls_fused, logreg_irls_fused_solve, multinomial_irls_iter, fista_fit
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -49,6 +49,8 @@ class MetalRidge(BaseGPUEstimator):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y, **kwargs)
+
+        X = X.copy()
 
         n, p = X.shape
         alpha = self._estimator.alpha
@@ -201,21 +203,26 @@ class MetalLogisticRegression(BaseGPUEstimator):
         X_scaled = np.empty((n, pe), dtype=np.float32)
         Hessian = np.empty((pe, pe), dtype=np.float32)
         gradient = np.empty(pe, dtype=np.float32)
+        delta = np.empty(pe, dtype=np.float32)
 
         for it in range(max_iter):
-            # GPU: fused IRLS iteration (5 dispatches, was 8)
-            logreg_irls_fused(Xe, y, w, 0.0, linear, weight, X_scaled, Hessian, gradient)
-
-            # CPU: L2 regularization + Cholesky solve (zero-copy, no transfer cost)
-            if alpha > 0:
-                Hessian[np.diag_indices_from(Hessian)] += alpha
-                gradient += alpha * w
+            if pe >= 500:
+                # Full GPU solve: includes L2 regularization, Cholesky factorization and triangular solve
+                logreg_irls_fused_solve(
+                    Xe, y, w, 0.0, linear, weight, X_scaled, Hessian, gradient, delta, float(alpha)
+                )
+            else:
+                # Fused GPU calculations, followed by CPU solver (faster for small matrices)
+                logreg_irls_fused(Xe, y, w, 0.0, linear, weight, X_scaled, Hessian, gradient)
+                if alpha > 0:
+                    Hessian[np.diag_indices_from(Hessian)] += alpha
+                    gradient += alpha * w
+                delta = np.linalg.solve(Hessian, gradient)
 
             grad_norm = np.linalg.norm(gradient)
             if grad_norm < tol * max(1.0, np.linalg.norm(w)):
                 break
 
-            delta = np.linalg.solve(Hessian, gradient)
             w -= delta
 
         if fit_intercept:
