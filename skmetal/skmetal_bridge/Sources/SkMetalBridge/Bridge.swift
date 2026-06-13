@@ -799,26 +799,6 @@ public func skmetal_kmeans_normalize(
     return 0
 }
 
-// MARK: - SVD (MPS path, zero-copy)
-
-@_cdecl("skmetal_svd")
-public func skmetal_svd(
-    A: UnsafeRawPointer,
-    U: UnsafeMutableRawPointer,
-    S: UnsafeMutableRawPointer,
-    Vt: UnsafeMutableRawPointer,
-    m: Int,
-    n: Int,
-    k: Int
-) -> Int32 {
-    let aPtr = UnsafeMutablePointer(mutating: A.assumingMemoryBound(to: Float.self))
-    let uPtr = U.assumingMemoryBound(to: Float.self)
-    let sPtr = S.assumingMemoryBound(to: Float.self)
-    let vtPtr = Vt.assumingMemoryBound(to: Float.self)
-
-    return MPSSVD.compute(A: aPtr, m: m, n: n, k: k, U: uPtr, S: sPtr, Vt: vtPtr) ? 0 : 1
-}
-
 // MARK: - Element-Wise Ops (for Logistic Regression)
 
 @_cdecl("skmetal_sigmoid")
@@ -2390,6 +2370,160 @@ public func skmetal_negate(
     return 0
 }
 
+// MARK: - Multinomial IRLS iteration
+
+@_cdecl("skmetal_multinomial_irls_iter")
+public func skmetal_multinomial_irls_iter(
+    X: UnsafeRawPointer,
+    W: UnsafeRawPointer,
+    y: UnsafeRawPointer,
+    scores: UnsafeMutableRawPointer,
+    prob: UnsafeMutableRawPointer,
+    maxVals: UnsafeMutableRawPointer,
+    sumExp: UnsafeMutableRawPointer,
+    residual: UnsafeMutableRawPointer,
+    gradient: UnsafeMutableRawPointer,
+    hessians: UnsafeMutableRawPointer,
+    n: Int,
+    p: Int,
+    C: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let nFloat = n * MemoryLayout<Float>.stride
+    let pFloat = p * MemoryLayout<Float>.stride
+    let xSize = n * p * MemoryLayout<Float>.stride
+    let wSize = p * C * MemoryLayout<Float>.stride
+    let scoresSize = n * C * MemoryLayout<Float>.stride
+
+    guard let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
+          let wBuffer = wrapInput(W, length: wSize, device: ctx.device),
+          let yBuffer = wrapInput(y, length: nFloat, device: ctx.device),
+          let scoresBuffer = wrapOutput(scores, length: scoresSize, device: ctx.device),
+          let probBuffer = wrapOutput(prob, length: scoresSize, device: ctx.device),
+          let maxBuffer = wrapOutput(maxVals, length: nFloat, device: ctx.device),
+          let sumBuffer = wrapOutput(sumExp, length: nFloat, device: ctx.device),
+          let resBuffer = wrapOutput(residual, length: scoresSize, device: ctx.device),
+          let gBuffer = wrapOutput(gradient, length: p * C * MemoryLayout<Float>.stride, device: ctx.device),
+          let hBuffer = wrapOutput(hessians, length: C * p * p * MemoryLayout<Float>.stride, device: ctx.device) else {
+        return 1
+    }
+
+    let rowBytesX = p * MemoryLayout<Float>.stride
+    let rowBytesC = C * MemoryLayout<Float>.stride
+    let rowBytesP = p * MemoryLayout<Float>.stride
+
+    let descX = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
+    let descW = MPSMatrixDescriptor(dimensions: p, columns: C, rowBytes: rowBytesC, dataType: .float32)
+    let descScores = MPSMatrixDescriptor(dimensions: n, columns: C, rowBytes: rowBytesC, dataType: .float32)
+    let descRes = MPSMatrixDescriptor(dimensions: n, columns: C, rowBytes: rowBytesC, dataType: .float32)
+    let descG = MPSMatrixDescriptor(dimensions: p, columns: C, rowBytes: rowBytesC, dataType: .float32)
+
+    let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
+    let matrixW = MPSMatrix(buffer: wBuffer, descriptor: descW)
+    let matrixScores = MPSMatrix(buffer: scoresBuffer, descriptor: descScores)
+    let matrixRes = MPSMatrix(buffer: resBuffer, descriptor: descRes)
+    let matrixG = MPSMatrix(buffer: gBuffer, descriptor: descG)
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+
+    // Step 1: X @ W → scores (n×C)
+    let gemmXW = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: false, transposeRight: false,
+        resultRows: n, resultColumns: C, interiorColumns: p,
+        alpha: 1.0, beta: 0.0)
+    gemmXW.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixScores)
+
+    // Step 2: row_max(scores, maxVals)
+    if let pipeline = ctx.getPipeline(name: "row_max", functionName: "row_max") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(scoresBuffer, offset: 0, index: 0)
+        enc.setBuffer(maxBuffer, offset: 0, index: 1)
+        var nU = UInt32(n); var cU = UInt32(C)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+        enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 3)
+        enc.dispatchThreadgroups(MTLSize(width: n, height: 1, depth: 1),
+                                 threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+
+    // Step 3: softmax_exp(scores, maxVals, prob) → prob = exp(scores - max)
+    if let pipeline = ctx.getPipeline(name: "softmax_exp", functionName: "softmax_exp") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(scoresBuffer, offset: 0, index: 0)
+        enc.setBuffer(maxBuffer, offset: 0, index: 1)
+        enc.setBuffer(probBuffer, offset: 0, index: 2)
+        var nU = UInt32(n); var cU = UInt32(C)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
+        let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+        let tgCount = MTLSize(width: (C + 15) / 16, height: (n + 15) / 16, depth: 1)
+        enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+        enc.endEncoding()
+    }
+
+    // Step 4: row_sum(prob, sumExp)
+    if let pipeline = ctx.getPipeline(name: "row_sum", functionName: "row_sum") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(probBuffer, offset: 0, index: 0)
+        enc.setBuffer(sumBuffer, offset: 0, index: 1)
+        var nU = UInt32(n); var cU = UInt32(C)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+        enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 3)
+        enc.dispatchThreadgroups(MTLSize(width: n, height: 1, depth: 1),
+                                 threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+
+    // Step 5: softmax_normalize_residual(prob, sumExp, y, residual)
+    if let pipeline = ctx.getPipeline(name: "softmax_normalize_residual", functionName: "softmax_normalize_residual") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(probBuffer, offset: 0, index: 0)
+        enc.setBuffer(sumBuffer, offset: 0, index: 1)
+        enc.setBuffer(yBuffer, offset: 0, index: 2)
+        enc.setBuffer(resBuffer, offset: 0, index: 3)
+        var nU = UInt32(n); var cU = UInt32(C)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 4)
+        enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 5)
+        let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+        let tgCount = MTLSize(width: (C + 15) / 16, height: (n + 15) / 16, depth: 1)
+        enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+        enc.endEncoding()
+    }
+
+    // Step 6: X^T @ residual → gradient (p×C)
+    let gemmGrad = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: C, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    gemmGrad.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixRes, resultMatrix: matrixG)
+
+    // Step 7: multinomial_hessians(X, prob, sumExp, hessians)
+    if let pipeline = ctx.getPipeline(name: "multinomial_hessians", functionName: "multinomial_hessians") {
+        let enc = cb.makeComputeCommandEncoder()!
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(xBuffer, offset: 0, index: 0)
+        enc.setBuffer(probBuffer, offset: 0, index: 1)
+        enc.setBuffer(sumBuffer, offset: 0, index: 2)
+        enc.setBuffer(hBuffer, offset: 0, index: 3)
+        var nU = UInt32(n); var pU = UInt32(p); var cU = UInt32(C)
+        enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 4)
+        enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 5)
+        enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 6)
+        let tgSize = MTLSize(width: 8, height: 8, depth: 1)
+        let tgCount = MTLSize(width: (p + 7) / 8, height: (p + 7) / 8, depth: C)
+        enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+        enc.endEncoding()
+    }
+
+    cb.commit()
+    cb.waitUntilCompleted()
+    return 0
+}
+
 // MARK: - Pipeline warmup
 
 @_cdecl("skmetal_warmup")
@@ -2437,6 +2571,7 @@ public func skmetal_warmup() -> Int32 {
         ("softmax_exp", "softmax_exp"),
         ("softmax_normalize_residual", "softmax_normalize_residual"),
         ("negate", "negate"),
+        ("multinomial_hessians", "multinomial_hessians"),
     ]
 
     let cb = ctx.commandQueue.makeCommandBuffer()!

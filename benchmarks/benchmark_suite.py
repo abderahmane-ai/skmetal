@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 from sklearn.datasets import make_regression, make_classification, make_blobs
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression
-from sklearn.decomposition import PCA, TruncatedSVD
+from sklearn.decomposition import TruncatedSVD
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import skmetal
@@ -59,8 +59,6 @@ BENCHMARKS = [
      lambda: make_classification(n_samples=100000, n_features=200, random_state=42)),
     ("TruncatedSVD", lambda: TruncatedSVD(n_components=50, random_state=42),
      lambda: make_regression(n_samples=100000, n_features=500, random_state=42)),
-    ("PCA", lambda: PCA(n_components=50, random_state=42),
-     lambda: make_regression(n_samples=100000, n_features=1000, random_state=42)),
     ("KMeans", lambda: KMeans(n_clusters=50, max_iter=300, random_state=42),
      lambda: make_blobs(n_samples=500000, n_features=100, centers=50, random_state=42)),
     ("StandardScaler", StandardScaler,

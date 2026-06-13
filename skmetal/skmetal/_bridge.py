@@ -124,17 +124,6 @@ _lib.skmetal_kmeans_normalize.argtypes = [
 ]
 _lib.skmetal_kmeans_normalize.restype = ctypes.c_int
 
-_lib.skmetal_svd.argtypes = [
-    ctypes.c_void_p,  # A
-    ctypes.c_void_p,  # U
-    ctypes.c_void_p,  # S
-    ctypes.c_void_p,  # Vt
-    ctypes.c_size_t,  # m
-    ctypes.c_size_t,  # n
-    ctypes.c_size_t,  # k
-]
-_lib.skmetal_svd.restype = ctypes.c_int
-
 _lib.skmetal_sigmoid.argtypes = [
     ctypes.c_void_p,  # input
     ctypes.c_void_p,  # output
@@ -536,17 +525,6 @@ def kmeans_normalize(centroids: np.ndarray, counts: np.ndarray,
     )
     if err != 0:
         raise RuntimeError(f"kmeans_normalize failed with code {err}")
-
-
-def svd(A: np.ndarray, U: np.ndarray, S: np.ndarray, Vt: np.ndarray,
-        m: int, n: int, k: int) -> None:
-    """SVD on GPU via MPSMatrixDecompositionSVD (zero-copy)."""
-    err = _lib.skmetal_svd(
-        A.ctypes.data, U.ctypes.data, S.ctypes.data, Vt.ctypes.data,
-        ctypes.c_size_t(m), ctypes.c_size_t(n), ctypes.c_size_t(k),
-    )
-    if err != 0:
-        raise RuntimeError(f"SVD failed with code {err}")
 
 
 def sigmoid(input: np.ndarray, output: np.ndarray) -> None:
@@ -1073,6 +1051,51 @@ _lib.skmetal_negate.argtypes = [
     ctypes.c_size_t,  # n
 ]
 _lib.skmetal_negate.restype = ctypes.c_int
+
+
+# ============================================================
+# Multinomial IRLS iteration (GPU)
+# ============================================================
+
+_lib.skmetal_multinomial_irls_iter.argtypes = [
+    ctypes.c_void_p,  # X (n×p)
+    ctypes.c_void_p,  # W (p×C, in)
+    ctypes.c_void_p,  # y (n, class labels as float)
+    ctypes.c_void_p,  # scores (n×C, temp)
+    ctypes.c_void_p,  # prob (n×C, temp)
+    ctypes.c_void_p,  # max_vals (n, temp)
+    ctypes.c_void_p,  # sum_exp (n, temp)
+    ctypes.c_void_p,  # residual (n×C, temp)
+    ctypes.c_void_p,  # gradient (p×C, out)
+    ctypes.c_void_p,  # hessians (C×p×p, out)
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # p
+    ctypes.c_size_t,  # C
+]
+_lib.skmetal_multinomial_irls_iter.restype = ctypes.c_int
+
+
+def multinomial_irls_iter(X: np.ndarray, W: np.ndarray, y: np.ndarray,
+                           scores: np.ndarray, prob: np.ndarray,
+                           max_vals: np.ndarray, sum_exp: np.ndarray,
+                           residual: np.ndarray, gradient: np.ndarray,
+                           hessians: np.ndarray) -> None:
+    """GPU: one fused multinomial IRLS iteration in a single command buffer.
+
+    Computes: scores = X@W → softmax → residual → gradient + all C Hessians.
+    """
+    n, p = X.shape
+    C = W.shape[1]
+    err = _lib.skmetal_multinomial_irls_iter(
+        X.ctypes.data, W.ctypes.data, y.ctypes.data,
+        scores.ctypes.data, prob.ctypes.data,
+        max_vals.ctypes.data, sum_exp.ctypes.data,
+        residual.ctypes.data, gradient.ctypes.data,
+        hessians.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(p), ctypes.c_size_t(C),
+    )
+    if err != 0:
+        raise RuntimeError(f"multinomial_irls_iter failed with code {err}")
 
 
 def negate(a: np.ndarray, output: np.ndarray) -> None:

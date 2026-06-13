@@ -82,7 +82,6 @@ The decorator also works with pipelines:
 def pipeline():
     return Pipeline([
         ("scaler", StandardScaler()),
-        ("pca", PCA(n_components=20)),
         ("clf", LogisticRegression()),
     ])
 
@@ -116,7 +115,6 @@ with skmetal.accelerate_context():
 | `LinearRegression` | Normal equations via MPS GEMM | **5.93x** |
 | `Ridge` | Fused centering + XTX + XTy (1 dispatch) | **1.16x** |
 | `TruncatedSVD` | Randomized SVD, no centering (all BLAS-3) | **2.53x** |
-| `PCA` | Randomized SVD via Cholesky QR (all BLAS-3) | 0.95x |
 | `LogisticRegression` | IRLS (3-5 Newton iterations, fused) | 0.91x |
 | `KMeans` | 2-dispatch pipeline (assign + combine/normalize) | 0.69x |
 | `MinMaxScaler` | `column_minmax` (threadgroup tree reduction) | -- |
@@ -164,7 +162,7 @@ skmetal/
     estimators/
       linear_model.py    LinearRegression, Ridge, LogisticRegression
       cluster.py         KMeans
-      decomposition.py   PCA, TruncatedSVD
+      decomposition.py   TruncatedSVD
       preprocessing.py   StandardScaler, MinMaxScaler
     kernels/             Python bridge call wrappers
     utils.py
@@ -172,7 +170,7 @@ skmetal/
     Sources/SkMetalBridge/
       Bridge.swift       33 @_cdecl exports
       MetalContext.swift
-      MPS/SVD.swift      Accelerate LAPACK SVD
+
       Kernels/*.metal    8 Metal kernel files
   benchmarks/
     run_compare.py       benchmark runner

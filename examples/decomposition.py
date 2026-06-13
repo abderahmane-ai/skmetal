@@ -4,15 +4,13 @@ Compares every supported decomposition estimator side-by-side on CPU vs GPU,
 measuring fit/transform time and reconstruction error.
 
 Estimators covered:
-  - PCA           — principal component analysis (SVD-based)
   - TruncatedSVD  — randomized SVD for sparse-ish data
 """
 import time
 import warnings
 import numpy as np
 from sklearn.datasets import make_regression
-from sklearn.decomposition import PCA, TruncatedSVD
-from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import TruncatedSVD
 import skmetal
 
 warnings.filterwarnings("ignore")
@@ -26,7 +24,6 @@ X = X.astype(np.float32)
 # error should be nearly identical between CPU and GPU.
 
 DECOMPOSERS = [
-    ("PCA",          PCA,          {"n_components": n_components, "random_state": 42}),
     ("TruncatedSVD", TruncatedSVD, {"n_components": n_components, "random_state": 42}),
 ]
 

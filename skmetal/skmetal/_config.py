@@ -8,7 +8,7 @@ PER_ESTIMATOR_THRESHOLDS = {
     "StandardScaler":    (1_000,   10),
     "MinMaxScaler":      (500_000, 10),
     "RobustScaler":      (100_000, 10),
-    "PCA":               (5_000,   20),
+
     "TruncatedSVD":      (5_000,   20),
     "Ridge":             (100_000, 50),
     "Lasso":             (50_000,  50),

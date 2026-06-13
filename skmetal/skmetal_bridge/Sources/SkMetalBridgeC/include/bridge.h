@@ -43,8 +43,6 @@ int skmetal_kmeans_iter(const void* X, const void* centroids_in, void* assignmen
 int skmetal_kmeans_batch(const void* X, void* centroids, void* assignments, void* partial_centroids, void* partial_counts, size_t n, size_t d, size_t k, size_t num_groups, size_t max_iter);
 int skmetal_kmeans_batch_fused(const void* X, void* centroids, void* assignments, size_t n, size_t d, size_t k, size_t num_groups, size_t max_iter);
 
-int skmetal_svd(const void* A, void* U, void* S, void* Vt, size_t m, size_t n, size_t k);
-
 int skmetal_sigmoid(const void* input, void* output, size_t n);
 int skmetal_subtract(const void* a, const void* b, void* output, size_t n);
 int skmetal_axpy(void* a, const void* b, float alpha, size_t n);
@@ -64,6 +62,8 @@ int skmetal_knn_vote_regress(const void* indices, const void* train_targets, voi
 
 int skmetal_soft_threshold(void* w, const void* w_temp, float threshold, size_t n);
 int skmetal_column_transform(const void* input, void* output, const void* center, const void* scale, size_t n, size_t d);
+
+int skmetal_multinomial_irls_iter(const void* X, const void* W, const void* y, void* scores, void* prob, void* max_vals, void* sum_exp, void* residual, void* gradient, void* hessians, size_t n, size_t p, size_t C);
 
 int skmetal_warmup(void);
 

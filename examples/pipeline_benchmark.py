@@ -1,12 +1,12 @@
 """Multi-step pipeline benchmark: CPU vs GPU end-to-end.
 
 Demonstrates skmetal.accelerate applied to a full sklearn Pipeline
-(StandardScaler → PCA → linear model), measuring wall-clock time and
+(StandardScaler → linear model), measuring wall-clock time and
 verifying that RMSE matches the CPU baseline.
 
 Pipelines tested:
-  - StandardScaler + PCA + Ridge
-  - StandardScaler + PCA + LinearRegression
+  - StandardScaler + Ridge
+  - StandardScaler + LinearRegression
 """
 import time
 import warnings
@@ -14,7 +14,6 @@ import numpy as np
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import Ridge, LinearRegression
 from sklearn.metrics import mean_squared_error
@@ -23,7 +22,7 @@ import skmetal
 warnings.filterwarnings("ignore")
 
 
-def benchmark(name, model_cls, n, d, k=20, **kwargs):
+def benchmark(name, model_cls, n, d, **kwargs):
     """Benchmark a single pipeline configuration."""
 
     # ── Generate data ──────────────────────────────────────────────────────
@@ -35,7 +34,6 @@ def benchmark(name, model_cls, n, d, k=20, **kwargs):
     # ── CPU pipeline ───────────────────────────────────────────────────────
     cpu = Pipeline([
         ("scaler", StandardScaler()),
-        ("pca", PCA(n_components=min(k, d), random_state=42)),
         ("model", model_cls(**kwargs)),
     ])
     t0 = time.perf_counter()
@@ -47,7 +45,6 @@ def benchmark(name, model_cls, n, d, k=20, **kwargs):
     # ── GPU pipeline (via skmetal.accelerate) ──────────────────────────────
     gpu = skmetal.accelerate(Pipeline([
         ("scaler", StandardScaler()),
-        ("pca", PCA(n_components=min(k, d), random_state=42)),
         ("model", model_cls(**kwargs)),
     ]))
     t0 = time.perf_counter()
@@ -60,7 +57,7 @@ def benchmark(name, model_cls, n, d, k=20, **kwargs):
     rmse_match = "yes" if abs(cpu_rmse - gpu_rmse) < 0.01 else f"diff {abs(cpu_rmse - gpu_rmse):.4f}"
 
     return {
-        "name": f"Scaler+PCA+{name}",
+        "name": f"Scaler+{name}",
         "n": n,
         "d": d,
         "cpu_time": cpu_fit,
@@ -80,7 +77,7 @@ cases = [
     ("LinearRegression",  LinearRegression, 100_000,  500, {}),
 ]
 
-print(f"{'Pipeline (Scaler+PCA+model)':<35} {'n':>8} {'d':>6} {'CPU(s)':>8} "
+print(f"{'Pipeline (Scaler+model)':<35} {'n':>8} {'d':>6} {'CPU(s)':>8} "
       f"{'GPU(s)':>8} {'Speedup':>8} {'RMSE':>8} {'Match':>10}")
 print("=" * 93)
 

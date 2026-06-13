@@ -19,7 +19,7 @@ def _get_gpu_impl(estimator):
         "MetalLogisticRegression": ("skmetal.estimators.linear_model", "MetalLogisticRegression"),
         "MetalLasso": ("skmetal.estimators.linear_model", "MetalLasso"),
         "MetalElasticNet": ("skmetal.estimators.linear_model", "MetalElasticNet"),
-        "MetalPCA": ("skmetal.estimators.decomposition", "MetalPCA"),
+
         "MetalTruncatedSVD": ("skmetal.estimators.decomposition", "MetalTruncatedSVD"),
         "MetalKMeans": ("skmetal.estimators.cluster", "MetalKMeans"),
         "MetalDBSCAN": ("skmetal.estimators.cluster", "MetalDBSCAN"),

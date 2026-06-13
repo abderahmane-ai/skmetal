@@ -3,7 +3,7 @@
 from ._base import BaseGPUEstimator
 from ._registry import GPU_ESTIMATORS, PIPELINE_PATTERNS
 from .linear_model import MetalLinearRegression, MetalRidge, MetalLogisticRegression, MetalLasso, MetalElasticNet
-from .decomposition import MetalPCA
+
 from .cluster import MetalKMeans, MetalDBSCAN
 from .naive_bayes import MetalGaussianNB
 from .preprocessing import MetalStandardScaler, MetalMinMaxScaler, MetalRobustScaler
@@ -19,7 +19,7 @@ __all__ = [
     "MetalLogisticRegression",
     "MetalLasso",
     "MetalElasticNet",
-    "MetalPCA",
+
     "MetalKMeans",
     "MetalDBSCAN",
     "MetalGaussianNB",

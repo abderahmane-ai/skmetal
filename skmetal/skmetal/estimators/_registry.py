@@ -1,7 +1,7 @@
 """Estimator registry mapping sklearn classes to GPU implementations."""
 
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression, Lasso, ElasticNet
-from sklearn.decomposition import PCA, TruncatedSVD
+from sklearn.decomposition import TruncatedSVD
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
@@ -15,7 +15,7 @@ GPU_ESTIMATORS = {
     LogisticRegression: "MetalLogisticRegression",
     Lasso: "MetalLasso",
     ElasticNet: "MetalElasticNet",
-    PCA: "MetalPCA",
+
     TruncatedSVD: "MetalTruncatedSVD",
     KMeans: "MetalKMeans",
     DBSCAN: "MetalDBSCAN",
@@ -37,7 +37,7 @@ PIPELINE_PATTERNS = {
     "logisticregression": LogisticRegression,
     "lasso": Lasso,
     "elasticnet": ElasticNet,
-    "pca": PCA,
+
     "truncatedsvd": TruncatedSVD,
     "kmeans": KMeans,
     "dbscan": DBSCAN,

@@ -5,11 +5,12 @@ import pytest
 from sklearn.datasets import make_classification, make_regression, make_blobs
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression, Lasso, ElasticNet
 from sklearn.ensemble import HistGradientBoostingRegressor, HistGradientBoostingClassifier
-from sklearn.decomposition import PCA, TruncatedSVD
+from sklearn.decomposition import TruncatedSVD
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
+from sklearn.pipeline import Pipeline
 import skmetal
 from skmetal import _bridge
 
@@ -75,8 +76,6 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
      lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
     (LogisticRegression,
      lambda: make_classification(n_samples=2000, n_features=50, random_state=42), True),
-    (PCA,
-     lambda: make_regression(n_samples=2000, n_features=100, random_state=42), False),
     (TruncatedSVD,
      lambda: make_regression(n_samples=2000, n_features=100, random_state=42), False),
     (KMeans,
@@ -148,22 +147,18 @@ def test_estimator_correctness(EstimatorCls, data_fn, has_y):
 
 def test_pipeline_correctness():
     """Test GPU-accelerated pipeline."""
-    from sklearn.pipeline import Pipeline
-
     X, y = make_classification(n_samples=2000, n_features=100, random_state=42)
     X = X.astype(np.float32)
     y = y.astype(np.float32)
 
     pipe_cpu = Pipeline([
         ("scaler", StandardScaler()),
-        ("pca", PCA(n_components=20)),
         ("clf", LogisticRegression()),
     ])
     pipe_cpu.fit(X, y)
 
     pipe_gpu = skmetal.accelerate(Pipeline([
         ("scaler", StandardScaler()),
-        ("pca", PCA(n_components=20)),
         ("clf", LogisticRegression()),
     ]))
     pipe_gpu.fit(X, y)

@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, sigmoid, ridge_fit, logreg_irls_iter, soft_threshold
+from .._bridge import gemm, sigmoid, ridge_fit, logreg_irls_iter, soft_threshold, multinomial_irls_iter
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -235,17 +235,7 @@ class MetalLogisticRegression(BaseGPUEstimator):
             self._estimator.coef_ = coef_.reshape(1, -1)
             self._estimator.intercept_ = np.array([intercept_])
         else:
-            coefs = []
-            intercepts = []
-            for c in classes:
-                y_bin = np.where(y == c, np.float32(1.0), np.float32(0.0))
-                coef_c, intercept_c = self._fit_binary(
-                    X, y_bin, C, tol, max_iter, fit_intercept, penalty, pos_label=c
-                )
-                coefs.append(coef_c)
-                intercepts.append(intercept_c)
-            self._estimator.coef_ = np.array(coefs)
-            self._estimator.intercept_ = np.array(intercepts)
+            self._fit_multinomial(X, y, classes, n, p, n_classes, tol, max_iter, fit_intercept, penalty)
 
         self._estimator.classes_ = classes
         self._fitted = True
@@ -295,6 +285,59 @@ class MetalLogisticRegression(BaseGPUEstimator):
             b_final = 0.0
 
         return w_final, b_final
+
+    def _fit_multinomial(self, X, y, classes, n, p, C, tol, max_iter, fit_intercept, penalty):
+        alpha = 1.0 / C if penalty == "l2" else 0.0
+
+        y_enc = np.zeros(n, dtype=np.float32)
+        class_to_idx = {c: i for i, c in enumerate(classes)}
+        for i in range(n):
+            y_enc[i] = class_to_idx[y[i]]
+
+        if fit_intercept:
+            ones = np.ones((n, 1), dtype=np.float32)
+            Xe = np.column_stack([X, ones])
+            pe = p + 1
+        else:
+            Xe = X
+            pe = p
+
+        W = np.zeros((pe, C), dtype=np.float32)
+        scores = np.empty((n, C), dtype=np.float32)
+        prob = np.empty_like(scores)
+        max_vals = np.empty(n, dtype=np.float32)
+        sum_exp = np.empty(n, dtype=np.float32)
+        residual = np.empty_like(scores)
+        gradient = np.empty((pe, C), dtype=np.float32)
+        hessians = np.empty((C, pe, pe), dtype=np.float32)
+
+        for it in range(max_iter):
+            multinomial_irls_iter(Xe, W, y_enc, scores, prob, max_vals, sum_exp, residual, gradient, hessians)
+
+            if alpha > 0:
+                alpha_scaled = alpha / n
+                for c in range(C):
+                    hessians[c, range(pe), range(pe)] += alpha_scaled
+                    gradient[:, c] += alpha_scaled * W[:, c]
+
+            grad_norm = np.linalg.norm(gradient)
+            if grad_norm < tol * max(1.0, np.linalg.norm(W)):
+                break
+
+            for c in range(C):
+                H = hessians[c]
+                G_c = gradient[:, c].copy()
+                delta = np.linalg.solve(H, G_c)
+                W[:, c] -= delta
+
+        if fit_intercept:
+            self._estimator.coef_ = W[:-1].T.copy()
+            self._estimator.intercept_ = W[-1].copy()
+        else:
+            self._estimator.coef_ = W.T.copy()
+            self._estimator.intercept_ = np.zeros(C, dtype=np.float32)
+
+        self._estimator.classes_ = classes
 
     def predict(self, X):
         X = self._validate_data(X)[0]

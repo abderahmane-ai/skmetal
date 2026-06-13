@@ -2,7 +2,6 @@
 
 import pytest
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression
-from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import Pipeline
