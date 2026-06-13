@@ -40,6 +40,11 @@ class MetalKMeans(BaseGPUEstimator):
                 X, centroids, assignments, n, d, k, num_groups, max_iter, tol
             )
 
+            # Validate assignments — GPU kernel may write garbage on some runners
+            if assignments.min() < 0 or assignments.max() >= k:
+                centroids, assignments = self._kmeans_cpu_fallback(X, k, max_iter, tol, rng)
+                actual_iters = max_iter
+
             diff = X - centroids[assignments]
             inertia = float(np.sum(diff * diff))
             if inertia < best_inertia:
@@ -102,6 +107,13 @@ class MetalKMeans(BaseGPUEstimator):
         if not centroids.flags['C_CONTIGUOUS']:
             return np.ascontiguousarray(centroids)
         return centroids
+
+    def _kmeans_cpu_fallback(self, X, k, max_iter, tol, rng):
+        from sklearn.cluster import KMeans as SklearnKMeans
+        km = SklearnKMeans(n_clusters=k, init='k-means++', n_init=1,
+                          max_iter=max_iter, tol=tol, random_state=rng)
+        km.fit(X)
+        return km.cluster_centers_.astype(np.float32), km.labels_.astype(np.uint32)
 
     def transform(self, X):
         X = self._validate_data(X)[0]
