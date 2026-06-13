@@ -281,6 +281,20 @@ _lib.skmetal_soft_threshold.argtypes = [
 ]
 _lib.skmetal_soft_threshold.restype = ctypes.c_int
 
+_lib.skmetal_fista_fit.argtypes = [
+    ctypes.c_void_p,  # X
+    ctypes.c_void_p,  # y
+    ctypes.c_void_p,  # coef_out
+    ctypes.c_size_t,  # n
+    ctypes.c_size_t,  # p
+    ctypes.c_float,   # alpha
+    ctypes.c_float,   # l1_ratio
+    ctypes.c_float,   # tol
+    ctypes.c_int32,   # max_iter
+    ctypes.POINTER(ctypes.c_int32),  # n_iter_out
+]
+_lib.skmetal_fista_fit.restype = ctypes.c_int
+
 _lib.skmetal_column_transform.argtypes = [
     ctypes.c_void_p,  # input
     ctypes.c_void_p,  # output
@@ -599,6 +613,30 @@ def ridge_fit(X: np.ndarray, y: np.ndarray,
     )
     if err != 0:
         raise RuntimeError(f"ridge_fit failed with code {err}")
+
+
+def fista_fit(X: np.ndarray, y: np.ndarray, alpha: float, l1_ratio: float = 1.0,
+              tol: float = 1e-4, max_iter: int = 1000) -> tuple[np.ndarray, int]:
+    """GPU-resident FISTA for Lasso/ElasticNet.
+
+    Entire FISTA loop runs on GPU. Only convergence check copies 2×p
+    floats back to CPU every 10 iterations.
+
+    Returns (coefficients, n_iter).
+    """
+    n, p = X.shape
+    coef = np.empty(p, dtype=np.float32, order="C")
+    n_iter_out = ctypes.c_int32(0)
+    err = _lib.skmetal_fista_fit(
+        X.ctypes.data, y.ctypes.data, coef.ctypes.data,
+        ctypes.c_size_t(n), ctypes.c_size_t(p),
+        ctypes.c_float(alpha), ctypes.c_float(l1_ratio),
+        ctypes.c_float(tol), ctypes.c_int32(max_iter),
+        ctypes.byref(n_iter_out),
+    )
+    if err != 0:
+        raise RuntimeError(f"fista_fit failed with code {err}")
+    return coef, n_iter_out.value
 
 
 def device_info() -> dict:

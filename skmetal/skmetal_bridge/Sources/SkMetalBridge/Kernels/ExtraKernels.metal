@@ -36,6 +36,17 @@ kernel void column_transform(
     output[tid] = (input[tid] - center[j]) * scale[j];
 }
 
+// Element-wise scale: a[i] *= s (in-place)
+kernel void scale_f32(
+    device float* a [[buffer(0)]],
+    constant float& s [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    a[tid] *= s;
+}
+
 // Shiloach-Vishkin connected components — initialize parent array (parent[i] = i)
 kernel void sv_init(
     device int* parent [[buffer(0)]],

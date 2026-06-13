@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, sigmoid, ridge_fit, logreg_irls_iter, soft_threshold, multinomial_irls_iter
+from .._bridge import gemm, sigmoid, ridge_fit, logreg_irls_iter, multinomial_irls_iter, fista_fit
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -93,44 +93,14 @@ class MetalLasso(BaseGPUEstimator):
             Xc = X
             yc = y
 
-        XTX = gemm(Xc, Xc, trans_A=True)
-        XTy = gemm(Xc, yc.reshape(-1, 1), trans_A=True).ravel()
+        coef, n_iter = fista_fit(Xc, yc, alpha, l1_ratio=1.0, tol=tol, max_iter=max_iter)
 
-        L = np.linalg.norm(XTX, ord=2)
-        step = 1.0 / L
-
-        x = np.zeros(p, dtype=np.float32)
-        z = np.zeros(p, dtype=np.float32)
-        x_temp = np.empty(p, dtype=np.float32)
-        x_prev = np.empty(p, dtype=np.float32)
-        t = 1.0
-
-        for it in range(max_iter):
-            np.copyto(x_prev, x)
-
-            grad = XTX @ z - XTy
-            np.copyto(x_temp, z - step * grad)
-
-            soft_threshold(x, x_temp, step * alpha * n)
-
-            t_prev = t
-            t = (1.0 + np.sqrt(1.0 + 4.0 * t_prev * t_prev)) / 2.0
-
-            np.copyto(x_temp, x - x_prev)
-            factor = (t_prev - 1.0) / t
-            np.copyto(z, x)
-            z += factor * x_temp
-
-            diff = np.max(np.abs(x - x_prev))
-            if diff < tol:
-                break
-
-        self._estimator.coef_ = x.astype(np.float32)
+        self._estimator.coef_ = coef
         if fit_intercept:
-            self._estimator.intercept_ = y_mean - X_mean @ x
+            self._estimator.intercept_ = y_mean - X_mean @ coef
         else:
             self._estimator.intercept_ = 0.0
-        self._estimator.n_iter_ = it + 1
+        self._estimator.n_iter_ = n_iter
         self._fitted = True
         return self
 
@@ -163,45 +133,14 @@ class MetalElasticNet(BaseGPUEstimator):
             Xc = X
             yc = y
 
-        XTX = gemm(Xc, Xc, trans_A=True)
-        XTy = gemm(Xc, yc.reshape(-1, 1), trans_A=True).ravel()
+        coef, n_iter = fista_fit(Xc, yc, alpha, l1_ratio=l1_ratio, tol=tol, max_iter=max_iter)
 
-        L = np.linalg.norm(XTX, ord=2)
-        step = 1.0 / L
-
-        x = np.zeros(p, dtype=np.float32)
-        z = np.zeros(p, dtype=np.float32)
-        x_temp = np.empty(p, dtype=np.float32)
-        x_prev = np.empty(p, dtype=np.float32)
-        t = 1.0
-
-        for it in range(max_iter):
-            np.copyto(x_prev, x)
-
-            grad = XTX @ z - XTy
-            np.copyto(x_temp, z - step * grad)
-
-            soft_threshold(x, x_temp, step * alpha * l1_ratio * n)
-            x /= (1.0 + step * alpha * (1.0 - l1_ratio) * n)
-
-            t_prev = t
-            t = (1.0 + np.sqrt(1.0 + 4.0 * t_prev * t_prev)) / 2.0
-
-            np.copyto(x_temp, x - x_prev)
-            factor = (t_prev - 1.0) / t
-            np.copyto(z, x)
-            z += factor * x_temp
-
-            diff = np.max(np.abs(x - x_prev))
-            if diff < tol:
-                break
-
-        self._estimator.coef_ = x.astype(np.float32)
+        self._estimator.coef_ = coef
         if fit_intercept:
-            self._estimator.intercept_ = y_mean - X_mean @ x
+            self._estimator.intercept_ = y_mean - X_mean @ coef
         else:
             self._estimator.intercept_ = 0.0
-        self._estimator.n_iter_ = it + 1
+        self._estimator.n_iter_ = n_iter
         self._fitted = True
         return self
 
