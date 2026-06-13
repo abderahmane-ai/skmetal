@@ -12,17 +12,14 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Set up Swift 6.1
         uses: swift-actions/setup-swift@v2
@@ -62,7 +59,7 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: skmetal-wheel-py${{ matrix.python-version }}
+          name: skmetal-wheel
           path: skmetal/dist/*.whl
 
   publish:
@@ -88,11 +85,10 @@ jobs:
           python-version: "3.12"
 
       # Download all per-python wheels into dist/ so the publish action finds them.
-      - name: Download all wheels
+      - name: Download wheels
         uses: actions/download-artifact@v4
         with:
-          pattern: skmetal-wheel-py*
-          merge-multiple: true
+          name: skmetal-wheel
           path: dist/
 
       # Build sdist from the Python package source (no Swift build needed).
