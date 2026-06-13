@@ -12,25 +12,37 @@ final class MetalContext: @unchecked Sendable {
     }
 
     let device: MTLDevice
-    let commandQueue: MTLCommandQueue
-    let bufferPool: BufferPool
     let library: MTLLibrary
+    private var queueMap: [Int: MTLCommandQueue] = [:]
+    private let queueLock = NSLock()
     private var pipelineCache: [String: MTLComputePipelineState] = [:]
     private let cacheLock = NSLock()
 
+    var commandQueue: MTLCommandQueue {
+        let tid = Thread.current.hashValue
+        queueLock.lock()
+        if let q = queueMap[tid] {
+            queueLock.unlock()
+            return q
+        }
+        guard let q = device.makeCommandQueue() else {
+            queueLock.unlock()
+            fatalError("Failed to create MTLCommandQueue")
+        }
+        queueMap[tid] = q
+        queueLock.unlock()
+        return q
+    }
+
     private init() {
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let queue = device.makeCommandQueue() else {
+        guard let device = MTLCreateSystemDefaultDevice() else {
             fatalError("Metal not supported on this device")
         }
         self.device = device
-        self.commandQueue = queue
-        self.bufferPool = BufferPool(device: device)
         self.library = MetalContext.compileLibrary(device: device)
     }
 
     private static func compileLibrary(device: MTLDevice) -> MTLLibrary {
-        // Try precompiled .metallib first
         let metallibName = "SkMetalBridge"
         let searchURLs: [URL?] = [
             Bundle.module.url(forResource: metallibName, withExtension: "metallib"),
@@ -41,7 +53,6 @@ final class MetalContext: @unchecked Sendable {
                 return try device.makeLibrary(URL: url)
             } catch {}
         }
-
         fatalError("""
             SkMetalBridge.metallib not found. Run: cd skmetal/skmetal_bridge && ./compile_metal.sh
             Searched Bundle.module and Kernels/ subdirectory.
