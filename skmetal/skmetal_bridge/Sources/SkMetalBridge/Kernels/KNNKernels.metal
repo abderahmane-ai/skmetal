@@ -146,3 +146,164 @@ kernel void knn_merge_topk(
         b_idxs[s] = m_idxs[s];
     }
 }
+
+// Manhattan (L1) tile-local top-k: direct L1 distance from X data.
+// No GEMM or norms needed. One thread per query row.
+kernel void knn_select_tile_topk_manhattan(
+    device const float* X_query [[buffer(0)]],
+    device const float* X_train [[buffer(1)]],
+    device float* out_vals [[buffer(2)]],
+    device int* out_idxs [[buffer(3)]],
+    constant uint& n_q [[buffer(4)]],
+    constant uint& n_t [[buffer(5)]],
+    constant uint& d [[buffer(6)]],
+    constant uint& k [[buffer(7)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= n_q || k == 0) return;
+    uint row = gid;
+
+    device float* my_vals = out_vals + row * k;
+    device int* my_idxs = out_idxs + row * k;
+
+    for (uint i = 0; i < k; i++) {
+        my_vals[i] = INFINITY;
+        my_idxs[i] = 0;
+    }
+
+    for (uint j = 0; j < n_t; j++) {
+        float dist = 0.0f;
+        for (uint dim = 0; dim < d; dim++) {
+            dist += fabs(X_query[row * d + dim] - X_train[j * d + dim]);
+        }
+
+        if (dist >= my_vals[k - 1]) continue;
+
+        uint pos = k - 1;
+        while (pos > 0 && dist < my_vals[pos - 1]) {
+            my_vals[pos] = my_vals[pos - 1];
+            my_idxs[pos] = my_idxs[pos - 1];
+            pos--;
+        }
+        my_vals[pos] = dist;
+        my_idxs[pos] = int(j);
+    }
+}
+
+// Cosine tile-local top-k: uses MPS dot products + precomputed row norms.
+// distance = 1 - dot / (sqrt(rq) * sqrt(rt)). One thread per query row.
+kernel void knn_select_tile_topk_cosine(
+    device const float* raw_dot [[buffer(0)]],
+    device const float* r_query [[buffer(1)]],
+    device const float* r_train [[buffer(2)]],
+    device float* out_vals [[buffer(3)]],
+    device int* out_idxs [[buffer(4)]],
+    constant uint& n_q [[buffer(5)]],
+    constant uint& n_t [[buffer(6)]],
+    constant uint& k [[buffer(7)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= n_q || k == 0) return;
+    uint row = gid;
+
+    device float* my_vals = out_vals + row * k;
+    device int* my_idxs = out_idxs + row * k;
+
+    for (uint i = 0; i < k; i++) {
+        my_vals[i] = INFINITY;
+        my_idxs[i] = 0;
+    }
+
+    float rq_sqrt = sqrt(r_query[row] + 1e-10f);
+    device const float* D_row = raw_dot + row * n_t;
+
+    for (uint j = 0; j < n_t; j++) {
+        float rt_sqrt = sqrt(r_train[j] + 1e-10f);
+        float dist = 1.0f - D_row[j] / (rq_sqrt * rt_sqrt);
+
+        if (dist >= my_vals[k - 1]) continue;
+
+        uint pos = k - 1;
+        while (pos > 0 && dist < my_vals[pos - 1]) {
+            my_vals[pos] = my_vals[pos - 1];
+            my_idxs[pos] = my_idxs[pos - 1];
+            pos--;
+        }
+        my_vals[pos] = dist;
+        my_idxs[pos] = int(j);
+    }
+}
+
+// Weighted majority-vote classification using distances.
+// Supports up to 256 classes. weight = 1 / (distance + eps).
+kernel void knn_vote_classify_weighted(
+    device const int* indices [[buffer(0)]],
+    device const float* distances [[buffer(1)]],
+    device const float* train_labels [[buffer(2)]],
+    device float* predictions [[buffer(3)]],
+    constant uint& N [[buffer(4)]],
+    constant uint& k [[buffer(5)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= N) return;
+
+    float weights[256];
+    uint labels[256];
+    uint n_unique = 0;
+
+    for (uint i = 0; i < k; i++) {
+        int idx = indices[tid * k + i];
+        float label = train_labels[idx];
+        uint l = uint(label);
+        float w = 1.0f / (distances[tid * k + i] + 1e-10f);
+
+        bool found = false;
+        for (uint j = 0; j < n_unique; j++) {
+            if (labels[j] == l) {
+                weights[j] += w;
+                found = true;
+                break;
+            }
+        }
+        if (!found && n_unique < 256) {
+            labels[n_unique] = l;
+            weights[n_unique] = w;
+            n_unique++;
+        }
+    }
+
+    float max_w = 0.0f;
+    int best = 0;
+    for (uint j = 0; j < n_unique; j++) {
+        if (weights[j] > max_w) {
+            max_w = weights[j];
+            best = int(labels[j]);
+        }
+    }
+    predictions[tid] = (float)best;
+}
+
+// Weighted mean regression from k-nearest neighbor targets.
+// weight = 1 / (distance + eps), prediction = sum(w * y) / sum(w).
+kernel void knn_vote_regress_weighted(
+    device const int* indices [[buffer(0)]],
+    device const float* distances [[buffer(1)]],
+    device const float* train_targets [[buffer(2)]],
+    device float* predictions [[buffer(3)]],
+    constant uint& N [[buffer(4)]],
+    constant uint& k [[buffer(5)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= N) return;
+
+    float w_sum = 0.0f;
+    float val_sum = 0.0f;
+    for (uint i = 0; i < k; i++) {
+        int idx = indices[tid * k + i];
+        float d = distances[tid * k + i];
+        float w = 1.0f / (d + 1e-10f);
+        w_sum += w;
+        val_sum += w * train_targets[idx];
+    }
+    predictions[tid] = val_sum / w_sum;
+}

@@ -3,7 +3,10 @@ from ._base import BaseGPUEstimator
 from .._bridge import (
     knn_tiled_kneighbors,
     knn_vote_classify, knn_vote_regress,
+    knn_vote_classify_weighted, knn_vote_regress_weighted,
 )
+
+_METRIC_MAP = {"euclidean": 0, "manhattan": 1, "cosine": 2}
 
 
 class MetalKNeighborsMixin:
@@ -14,8 +17,10 @@ class MetalKNeighborsMixin:
         if k is None:
             k = self._k_neighbors
 
+        metric = getattr(self._estimator, "metric", "euclidean")
         values, indices = knn_tiled_kneighbors(
             X, self._estimator._fit_X, k, self._tile_size,
+            metric=metric,
         )
         return values, indices
 
@@ -31,7 +36,10 @@ class MetalKNeighborsMixin:
 
         distances, indices = self._kneighbors(X, n_neighbors)
         if return_distance:
-            return np.sqrt(distances), indices
+            metric = getattr(self._estimator, "metric", "euclidean")
+            if metric == "euclidean":
+                distances = np.sqrt(distances)
+            return distances, indices
         return indices
 
 
@@ -69,7 +77,15 @@ class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
 
         predictions = np.empty(n_test, dtype=np.float32)
         train_labels = self._estimator._y.astype(np.float32).ravel()
-        knn_vote_classify(indices, train_labels, predictions, n_test, k, len(train_labels))
+
+        weights = getattr(self._estimator, "weights", "uniform")
+        if weights == "distance":
+            knn_vote_classify_weighted(indices, np.sqrt(distances),
+                                        train_labels, predictions,
+                                        n_test, k, len(train_labels))
+        else:
+            knn_vote_classify(indices, train_labels, predictions,
+                              n_test, k, len(train_labels))
 
         classes = self._estimator.classes_
         pred_classes = classes[np.round(predictions).astype(int)]
@@ -86,14 +102,27 @@ class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
         classes = self._estimator.classes_
         n_classes = len(classes)
 
+        weights = getattr(self._estimator, "weights", "uniform")
+
         proba = np.zeros((n_test, n_classes), dtype=np.float32)
-        for i in range(n_test):
-            neighbor_labels = self._estimator._y[indices[i]]
-            for lbl in neighbor_labels:
-                idx = np.where(classes == lbl)[0]
-                if len(idx) > 0:
-                    proba[i, idx[0]] += 1.0
-            proba[i] /= k
+        if weights == "distance":
+            d_safe = np.sqrt(np.maximum(distances, 1e-10))
+            w = 1.0 / d_safe
+            for i in range(n_test):
+                neighbor_labels = self._estimator._y[indices[i]]
+                for j, lbl in enumerate(neighbor_labels):
+                    idx = np.where(classes == lbl)[0]
+                    if len(idx) > 0:
+                        proba[i, idx[0]] += w[i, j]
+                proba[i] /= proba[i].sum()
+        else:
+            for i in range(n_test):
+                neighbor_labels = self._estimator._y[indices[i]]
+                for lbl in neighbor_labels:
+                    idx = np.where(classes == lbl)[0]
+                    if len(idx) > 0:
+                        proba[i, idx[0]] += 1.0
+                proba[i] /= k
 
         return proba
 
@@ -120,7 +149,15 @@ class MetalKNeighborsRegressor(MetalKNeighborsMixin, BaseGPUEstimator):
 
         predictions = np.empty(n_test, dtype=np.float32)
         train_targets = self._estimator._y.astype(np.float32).ravel()
-        knn_vote_regress(indices, train_targets, predictions, n_test, k, len(train_targets))
+
+        weights = getattr(self._estimator, "weights", "uniform")
+        if weights == "distance":
+            knn_vote_regress_weighted(indices, np.sqrt(distances),
+                                       train_targets, predictions,
+                                       n_test, k, len(train_targets))
+        else:
+            knn_vote_regress(indices, train_targets, predictions,
+                             n_test, k, len(train_targets))
 
         return predictions
 

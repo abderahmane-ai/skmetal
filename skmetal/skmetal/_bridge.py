@@ -270,8 +270,31 @@ _lib.skmetal_knn_tiled_kneighbors.argtypes = [
     ctypes.c_size_t,  # d
     ctypes.c_size_t,  # k
     ctypes.c_size_t,  # tile_size
+    ctypes.c_int32,   # metric  (0=euclidean, 1=manhattan, 2=cosine)
 ]
 _lib.skmetal_knn_tiled_kneighbors.restype = ctypes.c_int
+
+_lib.skmetal_knn_vote_classify_weighted.argtypes = [
+    ctypes.c_void_p,  # indices
+    ctypes.c_void_p,  # distances
+    ctypes.c_void_p,  # train_labels
+    ctypes.c_void_p,  # predictions
+    ctypes.c_size_t,  # N
+    ctypes.c_size_t,  # k
+    ctypes.c_size_t,  # n_train
+]
+_lib.skmetal_knn_vote_classify_weighted.restype = ctypes.c_int
+
+_lib.skmetal_knn_vote_regress_weighted.argtypes = [
+    ctypes.c_void_p,  # indices
+    ctypes.c_void_p,  # distances
+    ctypes.c_void_p,  # train_targets
+    ctypes.c_void_p,  # predictions
+    ctypes.c_size_t,  # N
+    ctypes.c_size_t,  # k
+    ctypes.c_size_t,  # n_train
+]
+_lib.skmetal_knn_vote_regress_weighted.restype = ctypes.c_int
 
 _lib.skmetal_soft_threshold.argtypes = [
     ctypes.c_void_p,  # w (in/out)
@@ -676,14 +699,54 @@ def knn_vote_regress(indices: np.ndarray, train_targets: np.ndarray,
         raise RuntimeError(f"knn_vote_regress failed with code {err}")
 
 
-def knn_tiled_kneighbors(X_query: np.ndarray, X_train: np.ndarray, k: int, tile_size: int = 4096) -> tuple[np.ndarray, np.ndarray]:
+def knn_vote_classify_weighted(indices: np.ndarray, distances: np.ndarray,
+                                train_labels: np.ndarray,
+                                predictions: np.ndarray,
+                                N: int, k: int, n_train: int) -> None:
+    """GPU: weighted majority-vote classification.
+
+    weight = 1 / (distance + eps). Ties broken by smallest label.
+    """
+    err = _lib.skmetal_knn_vote_classify_weighted(
+        indices.ctypes.data, distances.ctypes.data,
+        train_labels.ctypes.data, predictions.ctypes.data,
+        ctypes.c_size_t(N), ctypes.c_size_t(k),
+        ctypes.c_size_t(n_train),
+    )
+    if err != 0:
+        raise RuntimeError(f"knn_vote_classify_weighted failed with code {err}")
+
+
+def knn_vote_regress_weighted(indices: np.ndarray, distances: np.ndarray,
+                               train_targets: np.ndarray,
+                               predictions: np.ndarray,
+                               N: int, k: int, n_train: int) -> None:
+    """GPU: weighted mean regression. weight = 1 / (distance + eps)."""
+    err = _lib.skmetal_knn_vote_regress_weighted(
+        indices.ctypes.data, distances.ctypes.data,
+        train_targets.ctypes.data, predictions.ctypes.data,
+        ctypes.c_size_t(N), ctypes.c_size_t(k),
+        ctypes.c_size_t(n_train),
+    )
+    if err != 0:
+        raise RuntimeError(f"knn_vote_regress_weighted failed with code {err}")
+
+
+def knn_tiled_kneighbors(X_query: np.ndarray, X_train: np.ndarray, k: int,
+                          tile_size: int = 4096,
+                          metric: str = "euclidean") -> tuple[np.ndarray, np.ndarray]:
     """GPU tiled k-nearest neighbors search.
 
-    Processes training data in tiles to avoid materializing the full N×M
-    distance matrix. Each tile: GEMM → k-select → merge into global top-k.
+    Supports Euclidean (squared L2), Manhattan (L1), and Cosine (1 - cos)
+    distance metrics. Manhattan avoids GEMM entirely. Cosine uses the same
+    GEMM + row norms as Euclidean.
 
-    Returns (squared_distances, indices).
+    Returns (distances, indices). For Euclidean, distances are squared.
+    For Manhattan/Cosine, distances are actual (not squared).
     """
+    metric_map = {"euclidean": 0, "manhattan": 1, "cosine": 2}
+    mcode = metric_map.get(metric, 0)
+
     n_q, d = X_query.shape
     n_t, _ = X_train.shape
     out_indices = np.empty((n_q, k), dtype=np.int32, order="C")
@@ -694,6 +757,7 @@ def knn_tiled_kneighbors(X_query: np.ndarray, X_train: np.ndarray, k: int, tile_
         ctypes.c_size_t(n_q), ctypes.c_size_t(n_t),
         ctypes.c_size_t(d), ctypes.c_size_t(k),
         ctypes.c_size_t(tile_size),
+        ctypes.c_int32(mcode),
     )
     if err != 0:
         raise RuntimeError(f"knn_tiled_kneighbors failed with code {err}")
