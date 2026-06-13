@@ -84,48 +84,6 @@ _lib.skmetal_kmeans_assign.argtypes = [
 ]
 _lib.skmetal_kmeans_assign.restype = ctypes.c_int
 
-_lib.skmetal_kmeans_update.argtypes = [
-    ctypes.c_void_p,  # X
-    ctypes.c_void_p,  # assignments
-    ctypes.c_void_p,  # centroids (output)
-    ctypes.c_void_p,  # counts (output)
-    ctypes.c_size_t,  # n
-    ctypes.c_size_t,  # d
-    ctypes.c_size_t,  # k
-]
-_lib.skmetal_kmeans_update.restype = ctypes.c_int
-
-_lib.skmetal_kmeans_partial_update.argtypes = [
-    ctypes.c_void_p,  # X
-    ctypes.c_void_p,  # assignments
-    ctypes.c_void_p,  # partial_centroids
-    ctypes.c_void_p,  # partial_counts
-    ctypes.c_size_t,  # n
-    ctypes.c_size_t,  # d
-    ctypes.c_size_t,  # k
-    ctypes.c_size_t,  # num_groups
-]
-_lib.skmetal_kmeans_partial_update.restype = ctypes.c_int
-
-_lib.skmetal_kmeans_combine.argtypes = [
-    ctypes.c_void_p,  # partial_centroids
-    ctypes.c_void_p,  # partial_counts
-    ctypes.c_void_p,  # centroids
-    ctypes.c_void_p,  # counts
-    ctypes.c_size_t,  # k
-    ctypes.c_size_t,  # d
-    ctypes.c_size_t,  # num_groups
-]
-_lib.skmetal_kmeans_combine.restype = ctypes.c_int
-
-_lib.skmetal_kmeans_normalize.argtypes = [
-    ctypes.c_void_p,  # centroids (in/out)
-    ctypes.c_void_p,  # counts
-    ctypes.c_size_t,  # k
-    ctypes.c_size_t,  # d
-]
-_lib.skmetal_kmeans_normalize.restype = ctypes.c_int
-
 _lib.skmetal_sigmoid.argtypes = [
     ctypes.c_void_p,  # input
     ctypes.c_void_p,  # output
@@ -174,20 +132,6 @@ _lib.skmetal_kmeans_combine_normalize.argtypes = [
 ]
 _lib.skmetal_kmeans_combine_normalize.restype = ctypes.c_int
 
-_lib.skmetal_kmeans_iter.argtypes = [
-    ctypes.c_void_p,  # X
-    ctypes.c_void_p,  # centroids_in
-    ctypes.c_void_p,  # assignments (out)
-    ctypes.c_void_p,  # partial_centroids (out)
-    ctypes.c_void_p,  # partial_counts (out)
-    ctypes.c_void_p,  # centroids_out
-    ctypes.c_size_t,  # n
-    ctypes.c_size_t,  # d
-    ctypes.c_size_t,  # k
-    ctypes.c_size_t,  # num_groups
-]
-_lib.skmetal_kmeans_iter.restype = ctypes.c_int
-
 _lib.skmetal_ridge_fit.argtypes = [
     ctypes.c_void_p,  # X (n×p, modified in-place to centered)
     ctypes.c_void_p,  # y (n)
@@ -213,20 +157,6 @@ _lib.skmetal_logreg_irls_iter.argtypes = [
     ctypes.c_size_t,  # p
 ]
 _lib.skmetal_logreg_irls_iter.restype = ctypes.c_int
-
-_lib.skmetal_kmeans_batch.argtypes = [
-    ctypes.c_void_p,  # X (n×d)
-    ctypes.c_void_p,  # centroids (k×d, in/out)
-    ctypes.c_void_p,  # assignments (n, out)
-    ctypes.c_void_p,  # partial_centroids (num_groups×k×d)
-    ctypes.c_void_p,  # partial_counts (num_groups×k)
-    ctypes.c_size_t,  # n
-    ctypes.c_size_t,  # d
-    ctypes.c_size_t,  # k
-    ctypes.c_size_t,  # num_groups
-    ctypes.c_size_t,  # max_iter
-]
-_lib.skmetal_kmeans_batch.restype = ctypes.c_int
 
 _lib.skmetal_kmeans_batch_fused.argtypes = [
     ctypes.c_void_p,  # X (n×d)
@@ -478,57 +408,6 @@ def kmeans_assign(X: np.ndarray, centroids: np.ndarray, assignments: np.ndarray,
         raise RuntimeError(f"kmeans_assign failed with code {err}")
 
 
-def kmeans_update(X: np.ndarray, assignments: np.ndarray,
-                  centroids: np.ndarray, counts: np.ndarray,
-                  n: int, d: int, k: int) -> None:
-    """KMeans update step on GPU (direct atomic, for backward compat)."""
-    err = _lib.skmetal_kmeans_update(
-        X.ctypes.data, assignments.ctypes.data,
-        centroids.ctypes.data, counts.ctypes.data,
-        ctypes.c_size_t(n), ctypes.c_size_t(d), ctypes.c_size_t(k),
-    )
-    if err != 0:
-        raise RuntimeError(f"kmeans_update failed with code {err}")
-
-
-def kmeans_partial_update(X: np.ndarray, assignments: np.ndarray,
-                          partial_centroids: np.ndarray, partial_counts: np.ndarray,
-                          n: int, d: int, k: int, num_groups: int) -> None:
-    """KMeans partial update: threadgroup-local centroid sums (no device atomics)."""
-    err = _lib.skmetal_kmeans_partial_update(
-        X.ctypes.data, assignments.ctypes.data,
-        partial_centroids.ctypes.data, partial_counts.ctypes.data,
-        ctypes.c_size_t(n), ctypes.c_size_t(d), ctypes.c_size_t(k),
-        ctypes.c_size_t(num_groups),
-    )
-    if err != 0:
-        raise RuntimeError(f"kmeans_partial_update failed with code {err}")
-
-
-def kmeans_combine(partial_centroids: np.ndarray, partial_counts: np.ndarray,
-                   centroids: np.ndarray, counts: np.ndarray,
-                   k: int, d: int, num_groups: int) -> None:
-    """Combine partial centroid sums from all threadgroups."""
-    err = _lib.skmetal_kmeans_combine(
-        partial_centroids.ctypes.data, partial_counts.ctypes.data,
-        centroids.ctypes.data, counts.ctypes.data,
-        ctypes.c_size_t(k), ctypes.c_size_t(d), ctypes.c_size_t(num_groups),
-    )
-    if err != 0:
-        raise RuntimeError(f"kmeans_combine failed with code {err}")
-
-
-def kmeans_normalize(centroids: np.ndarray, counts: np.ndarray,
-                     k: int, d: int) -> None:
-    """KMeans normalize step on GPU (zero-copy)."""
-    err = _lib.skmetal_kmeans_normalize(
-        centroids.ctypes.data, counts.ctypes.data,
-        ctypes.c_size_t(k), ctypes.c_size_t(d),
-    )
-    if err != 0:
-        raise RuntimeError(f"kmeans_normalize failed with code {err}")
-
-
 def sigmoid(input: np.ndarray, output: np.ndarray) -> None:
     """GPU sigmoid: 1 / (1 + exp(-x)), in-place into output."""
     n = input.size
@@ -668,21 +547,6 @@ def kmeans_combine_normalize(partial_centroids: np.ndarray, partial_counts: np.n
         raise RuntimeError(f"kmeans_combine_normalize failed with code {err}")
 
 
-def kmeans_iter(X: np.ndarray, centroids_in: np.ndarray, assignments: np.ndarray,
-                partial_centroids: np.ndarray, partial_counts: np.ndarray,
-                centroids_out: np.ndarray, n: int, d: int, k: int, num_groups: int) -> None:
-    """GPU single command buffer: assign + partial_update + combine_normalize."""
-    err = _lib.skmetal_kmeans_iter(
-        X.ctypes.data, centroids_in.ctypes.data, assignments.ctypes.data,
-        partial_centroids.ctypes.data, partial_counts.ctypes.data,
-        centroids_out.ctypes.data,
-        ctypes.c_size_t(n), ctypes.c_size_t(d), ctypes.c_size_t(k),
-        ctypes.c_size_t(num_groups),
-    )
-    if err != 0:
-        raise RuntimeError(f"kmeans_iter failed with code {err}")
-
-
 def logreg_irls_iter(X, y, w, b, linear, weight, X_scaled, Hessian, gradient):
     """GPU: one fused IRLS iteration (X@w + b → sigmoid → Hessian + grad) in one command buffer."""
     n, p = X.shape
@@ -697,23 +561,9 @@ def logreg_irls_iter(X, y, w, b, linear, weight, X_scaled, Hessian, gradient):
         raise RuntimeError(f"logreg_irls_iter failed with code {err}")
 
 
-def kmeans_batch(X, centroids, assignments, partial_centroids, partial_counts,
-                  n, d, k, num_groups, max_iter):
-    """GPU: all KMeans iterations in a single command buffer (no per-iteration sync)."""
-    err = _lib.skmetal_kmeans_batch(
-        X.ctypes.data, centroids.ctypes.data, assignments.ctypes.data,
-        partial_centroids.ctypes.data, partial_counts.ctypes.data,
-        ctypes.c_size_t(n), ctypes.c_size_t(d),
-        ctypes.c_size_t(k), ctypes.c_size_t(num_groups),
-        ctypes.c_size_t(max_iter),
-    )
-    if err != 0:
-        raise RuntimeError(f"kmeans_batch failed with code {err}")
-
-
 def kmeans_batch_fused(X, centroids, assignments,
                         n, d, k, num_groups, max_iter):
-    """GPU: fused KMeans batch — 2 dispatches/iter (assign_partial + combine_normalize)."""
+    """GPU: all KMeans iterations in one command buffer (assign + batched partial_sum + combine_normalize)."""
     err = _lib.skmetal_kmeans_batch_fused(
         X.ctypes.data, centroids.ctypes.data, assignments.ctypes.data,
         ctypes.c_size_t(n), ctypes.c_size_t(d),

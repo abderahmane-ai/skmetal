@@ -548,61 +548,7 @@ public func skmetal_scale_rows(
     return 0
 }
 
-// MARK: - KMeans
-
-@_cdecl("skmetal_kmeans_update")
-public func skmetal_kmeans_update(
-    X: UnsafeRawPointer,
-    assignments: UnsafeRawPointer,
-    centroids: UnsafeMutableRawPointer,
-    counts: UnsafeMutableRawPointer,
-    n: Int,
-    d: Int,
-    k: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let xSize = n * d * MemoryLayout<Float>.stride
-    let aSize = n * MemoryLayout<UInt32>.stride
-    let cSize = k * d * MemoryLayout<Float>.stride
-    let countSize = k * MemoryLayout<UInt32>.stride
-
-    guard let pipeline = ctx.getPipeline(name: "kmeans_update", functionName: "kmeans_update"),
-          let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
-          let aBuffer = wrapInput(assignments, length: aSize, device: ctx.device),
-          let cBuffer = wrapOutput(centroids, length: cSize, device: ctx.device),
-          let countBuffer = wrapOutput(counts, length: countSize, device: ctx.device) else {
-        return 1
-    }
-
-    memset(cBuffer.contents(), 0, cSize)
-    memset(countBuffer.contents(), 0, countSize)
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
-
-    encoder.setComputePipelineState(pipeline)
-    encoder.setBuffer(xBuffer, offset: 0, index: 0)
-    encoder.setBuffer(aBuffer, offset: 0, index: 1)
-    encoder.setBuffer(cBuffer, offset: 0, index: 2)
-    encoder.setBuffer(countBuffer, offset: 0, index: 3)
-    var nUint = UInt32(n)
-    var dUint = UInt32(d)
-    var kUint = UInt32(k)
-    encoder.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 4)
-    encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 5)
-    encoder.setBytes(&kUint, length: MemoryLayout<UInt32>.stride, index: 6)
-
-    let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
-    let gridSize = MTLSize(width: n, height: 1, depth: 1)
-    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
-    encoder.endEncoding()
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
-// MARK: - KMeans (threadgroup-local update, zero-copy)
+// MARK: - KMeans assign
 
 @_cdecl("skmetal_kmeans_assign")
 public func skmetal_kmeans_assign(
@@ -641,156 +587,6 @@ public func skmetal_kmeans_assign(
 
     let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
     let gridSize = MTLSize(width: n, height: 1, depth: 1)
-    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
-    encoder.endEncoding()
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
-@_cdecl("skmetal_kmeans_partial_update")
-public func skmetal_kmeans_partial_update(
-    X: UnsafeRawPointer,
-    assignments: UnsafeRawPointer,
-    partialCentroids: UnsafeMutableRawPointer,
-    partialCounts: UnsafeMutableRawPointer,
-    n: Int,
-    d: Int,
-    k: Int,
-    numGroups: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let xSize = n * d * MemoryLayout<Float>.stride
-    let aSize = n * MemoryLayout<UInt32>.stride
-    let pcSize = numGroups * k * d * MemoryLayout<Float>.stride
-    let pcountSize = numGroups * k * MemoryLayout<UInt32>.stride
-
-    // Fallback to device-level atomics when k*d doesn't fit in threadgroup memory
-    if k * d > 7168 {
-        return skmetal_kmeans_update(X: X, assignments: assignments,
-                                     centroids: partialCentroids, counts: partialCounts,
-                                     n: n, d: d, k: k)
-    }
-
-    guard let pipeline = ctx.getPipeline(name: "kmeans_partial_update", functionName: "kmeans_partial_update"),
-          let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
-          let aBuffer = wrapInput(assignments, length: aSize, device: ctx.device),
-          let pcBuffer = wrapOutput(partialCentroids, length: pcSize, device: ctx.device),
-          let pcountBuffer = wrapOutput(partialCounts, length: pcountSize, device: ctx.device) else {
-        return 1
-    }
-
-    // Zero out output buffers
-    memset(pcBuffer.contents(), 0, pcSize)
-    memset(pcountBuffer.contents(), 0, pcountSize)
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
-
-    encoder.setComputePipelineState(pipeline)
-    encoder.setBuffer(xBuffer, offset: 0, index: 0)
-    encoder.setBuffer(aBuffer, offset: 0, index: 1)
-    encoder.setBuffer(pcBuffer, offset: 0, index: 2)
-    encoder.setBuffer(pcountBuffer, offset: 0, index: 3)
-    var nUint = UInt32(n)
-    var dUint = UInt32(d)
-    var kUint = UInt32(k)
-    var ngUint = UInt32(numGroups)
-    encoder.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 4)
-    encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 5)
-    encoder.setBytes(&kUint, length: MemoryLayout<UInt32>.stride, index: 6)
-    encoder.setBytes(&ngUint, length: MemoryLayout<UInt32>.stride, index: 7)
-
-    let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
-    let gridSize = MTLSize(width: numGroups, height: 1, depth: 1)
-    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
-    encoder.endEncoding()
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
-@_cdecl("skmetal_kmeans_combine")
-public func skmetal_kmeans_combine(
-    partialCentroids: UnsafeRawPointer,
-    partialCounts: UnsafeRawPointer,
-    centroids: UnsafeMutableRawPointer,
-    counts: UnsafeMutableRawPointer,
-    k: Int,
-    d: Int,
-    numGroups: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let pcSize = numGroups * k * d * MemoryLayout<Float>.stride
-    let pcountSize = numGroups * k * MemoryLayout<UInt32>.stride
-    let cSize = k * d * MemoryLayout<Float>.stride
-    let countSize = k * MemoryLayout<UInt32>.stride
-
-    guard let pipeline = ctx.getPipeline(name: "kmeans_combine", functionName: "kmeans_combine"),
-          let pcBuffer = wrapInput(partialCentroids, length: pcSize, device: ctx.device),
-          let pcountBuffer = wrapInput(partialCounts, length: pcountSize, device: ctx.device),
-          let cBuffer = wrapOutput(centroids, length: cSize, device: ctx.device),
-          let countBuffer = wrapOutput(counts, length: countSize, device: ctx.device) else {
-        return 1
-    }
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
-
-    encoder.setComputePipelineState(pipeline)
-    encoder.setBuffer(pcBuffer, offset: 0, index: 0)
-    encoder.setBuffer(pcountBuffer, offset: 0, index: 1)
-    encoder.setBuffer(cBuffer, offset: 0, index: 2)
-    encoder.setBuffer(countBuffer, offset: 0, index: 3)
-    var kUint = UInt32(k)
-    var dUint = UInt32(d)
-    var ngUint = UInt32(numGroups)
-    encoder.setBytes(&kUint, length: MemoryLayout<UInt32>.stride, index: 4)
-    encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 5)
-    encoder.setBytes(&ngUint, length: MemoryLayout<UInt32>.stride, index: 6)
-
-    let threadgroupSize = MTLSize(width: 1, height: 1, depth: 1)
-    let gridSize = MTLSize(width: k, height: 1, depth: 1)
-    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
-    encoder.endEncoding()
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
-@_cdecl("skmetal_kmeans_normalize")
-public func skmetal_kmeans_normalize(
-    centroids: UnsafeMutableRawPointer,
-    counts: UnsafeRawPointer,
-    k: Int,
-    d: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let cSize = k * d * MemoryLayout<Float>.stride
-    let countSize = k * MemoryLayout<UInt32>.stride
-
-    guard let pipeline = ctx.getPipeline(name: "kmeans_normalize", functionName: "kmeans_normalize"),
-          let cBuffer = wrapOutput(centroids, length: cSize, device: ctx.device),
-          let countBuffer = wrapInput(counts, length: countSize, device: ctx.device) else {
-        return 1
-    }
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
-
-    encoder.setComputePipelineState(pipeline)
-    encoder.setBuffer(cBuffer, offset: 0, index: 0)
-    encoder.setBuffer(countBuffer, offset: 0, index: 1)
-    var kUint = UInt32(k)
-    var dUint = UInt32(d)
-    encoder.setBytes(&kUint, length: MemoryLayout<UInt32>.stride, index: 2)
-    encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 3)
-
-    let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
-    let gridSize = MTLSize(width: k * d, height: 1, depth: 1)
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
     encoder.endEncoding()
 
@@ -1274,96 +1070,6 @@ public func skmetal_center_columns(
     return 0
 }
 
-// MARK: - KMeans fused iteration (assign + partial_update + combine_normalize in one command buffer)
-
-@_cdecl("skmetal_kmeans_iter")
-public func skmetal_kmeans_iter(
-    X: UnsafeRawPointer,
-    centroidsIn: UnsafeRawPointer,
-    assignments: UnsafeMutableRawPointer,
-    partialCentroids: UnsafeMutableRawPointer,
-    partialCounts: UnsafeMutableRawPointer,
-    centroidsOut: UnsafeMutableRawPointer,
-    n: Int,
-    d: Int,
-    k: Int,
-    numGroups: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let xSize = n * d * MemoryLayout<Float>.stride
-    let cSize = k * d * MemoryLayout<Float>.stride
-    let aSize = n * MemoryLayout<UInt32>.stride
-    let pcSize = numGroups * k * d * MemoryLayout<Float>.stride
-    let pcountSize = numGroups * k * MemoryLayout<UInt32>.stride
-
-    guard let assignPipeline = ctx.getPipeline(name: "kmeans_assign", functionName: "kmeans_assign"),
-          let partialPipeline = ctx.getPipeline(name: "kmeans_partial_update", functionName: "kmeans_partial_update"),
-          let combinePipeline = ctx.getPipeline(name: "kmeans_combine_normalize", functionName: "kmeans_combine_normalize"),
-          let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
-          let cBuffer = wrapInput(centroidsIn, length: cSize, device: ctx.device),
-          let aBuffer = wrapOutput(assignments, length: aSize, device: ctx.device),
-          let pcBuffer = wrapOutput(partialCentroids, length: pcSize, device: ctx.device),
-          let pcountBuffer = wrapOutput(partialCounts, length: pcountSize, device: ctx.device),
-          let coBuffer = wrapOutput(centroidsOut, length: cSize, device: ctx.device) else {
-        return 1
-    }
-
-    memset(pcBuffer.contents(), 0, pcSize)
-    memset(pcountBuffer.contents(), 0, pcountSize)
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-
-    // 1. Assign
-    let enc1 = commandBuffer.makeComputeCommandEncoder()!
-    enc1.setComputePipelineState(assignPipeline)
-    enc1.setBuffer(xBuffer, offset: 0, index: 0)
-    enc1.setBuffer(cBuffer, offset: 0, index: 1)
-    enc1.setBuffer(aBuffer, offset: 0, index: 2)
-    var nUint = UInt32(n)
-    var dUint = UInt32(d)
-    var kUint = UInt32(k)
-    enc1.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 3)
-    enc1.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 4)
-    enc1.setBytes(&kUint, length: MemoryLayout<UInt32>.stride, index: 5)
-    let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-    let gSize = MTLSize(width: n, height: 1, depth: 1)
-    enc1.dispatchThreadgroups(gSize, threadsPerThreadgroup: tgSize)
-    enc1.endEncoding()
-
-    // 2. Partial update
-    let enc2 = commandBuffer.makeComputeCommandEncoder()!
-    enc2.setComputePipelineState(partialPipeline)
-    enc2.setBuffer(xBuffer, offset: 0, index: 0)
-    enc2.setBuffer(aBuffer, offset: 0, index: 1)
-    enc2.setBuffer(pcBuffer, offset: 0, index: 2)
-    enc2.setBuffer(pcountBuffer, offset: 0, index: 3)
-    var ngUint = UInt32(numGroups)
-    enc2.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 4)
-    enc2.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 5)
-    enc2.setBytes(&kUint, length: MemoryLayout<UInt32>.stride, index: 6)
-    enc2.setBytes(&ngUint, length: MemoryLayout<UInt32>.stride, index: 7)
-    let pgSize = MTLSize(width: numGroups, height: 1, depth: 1)
-    enc2.dispatchThreadgroups(pgSize, threadsPerThreadgroup: tgSize)
-    enc2.endEncoding()
-
-    // 3. Combine + normalize
-    let enc3 = commandBuffer.makeComputeCommandEncoder()!
-    enc3.setComputePipelineState(combinePipeline)
-    enc3.setBuffer(pcBuffer, offset: 0, index: 0)
-    enc3.setBuffer(pcountBuffer, offset: 0, index: 1)
-    enc3.setBuffer(coBuffer, offset: 0, index: 2)
-    enc3.setBytes(&kUint, length: MemoryLayout<UInt32>.stride, index: 3)
-    enc3.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 4)
-    enc3.setBytes(&ngUint, length: MemoryLayout<UInt32>.stride, index: 5)
-    let cnSize = MTLSize(width: d, height: k, depth: 1)
-    enc3.dispatchThreadgroups(cnSize, threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
-    enc3.endEncoding()
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
 // MARK: - KMeans fused combine + normalize
 
 @_cdecl("skmetal_kmeans_combine_normalize")
@@ -1411,96 +1117,7 @@ public func skmetal_kmeans_combine_normalize(
     return 0
 }
 
-// MARK: - Batched KMeans: all iterations in one command buffer
-
-@_cdecl("skmetal_kmeans_batch")
-public func skmetal_kmeans_batch(
-    X: UnsafeRawPointer,
-    centroids: UnsafeMutableRawPointer,
-    assignments: UnsafeMutableRawPointer,
-    partialCentroids: UnsafeMutableRawPointer,
-    partialCounts: UnsafeMutableRawPointer,
-    n: Int,
-    d: Int,
-    k: Int,
-    numGroups: Int,
-    maxIter: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let xSize = n * d * MemoryLayout<Float>.stride
-    let cSize = k * d * MemoryLayout<Float>.stride
-    let aSize = n * MemoryLayout<UInt32>.stride
-    let pcSize = numGroups * k * d * MemoryLayout<Float>.stride
-    let pcountSize = numGroups * k * MemoryLayout<UInt32>.stride
-
-    guard let assignPipeline = ctx.getPipeline(name: "kmeans_assign", functionName: "kmeans_assign"),
-          let partialPipeline = ctx.getPipeline(name: "kmeans_partial_update", functionName: "kmeans_partial_update"),
-          let combinePipeline = ctx.getPipeline(name: "kmeans_combine_normalize", functionName: "kmeans_combine_normalize"),
-          let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
-          let cBuffer = wrapOutput(centroids, length: cSize, device: ctx.device),
-          let aBuffer = wrapOutput(assignments, length: aSize, device: ctx.device),
-          let pcBuffer = wrapOutput(partialCentroids, length: pcSize, device: ctx.device),
-          let pcountBuffer = wrapOutput(partialCounts, length: pcountSize, device: ctx.device) else {
-        return 1
-    }
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-
-    for _ in 0..<maxIter {
-        // Zero partial buffers
-        let clearEncoder = commandBuffer.makeBlitCommandEncoder()!
-        clearEncoder.fill(buffer: pcBuffer, range: 0..<pcSize, value: 0)
-        clearEncoder.fill(buffer: pcountBuffer, range: 0..<pcountSize, value: 0)
-        clearEncoder.endEncoding()
-
-        // 1. Assign
-        let enc1 = commandBuffer.makeComputeCommandEncoder()!
-        enc1.setComputePipelineState(assignPipeline)
-        enc1.setBuffer(xBuffer, offset: 0, index: 0)
-        enc1.setBuffer(cBuffer, offset: 0, index: 1)
-        enc1.setBuffer(aBuffer, offset: 0, index: 2)
-        var nU = UInt32(n); var dU = UInt32(d); var kU = UInt32(k)
-        enc1.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-        enc1.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
-        enc1.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 5)
-        enc1.dispatchThreadgroups(MTLSize(width: n, height: 1, depth: 1), threadsPerThreadgroup: tgSize)
-        enc1.endEncoding()
-
-        // 2. Partial update
-        let enc2 = commandBuffer.makeComputeCommandEncoder()!
-        enc2.setComputePipelineState(partialPipeline)
-        enc2.setBuffer(xBuffer, offset: 0, index: 0)
-        enc2.setBuffer(aBuffer, offset: 0, index: 1)
-        enc2.setBuffer(pcBuffer, offset: 0, index: 2)
-        enc2.setBuffer(pcountBuffer, offset: 0, index: 3)
-        var ngU = UInt32(numGroups)
-        enc2.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 4)
-        enc2.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 5)
-        enc2.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 6)
-        enc2.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 7)
-        enc2.dispatchThreadgroups(MTLSize(width: numGroups, height: 1, depth: 1), threadsPerThreadgroup: tgSize)
-        enc2.endEncoding()
-
-        // 3. Combine + normalize (writes directly to cBuffer for next iteration)
-        let enc3 = commandBuffer.makeComputeCommandEncoder()!
-        enc3.setComputePipelineState(combinePipeline)
-        enc3.setBuffer(pcBuffer, offset: 0, index: 0)
-        enc3.setBuffer(pcountBuffer, offset: 0, index: 1)
-        enc3.setBuffer(cBuffer, offset: 0, index: 2)
-        enc3.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 3)
-        enc3.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
-        enc3.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 5)
-        enc3.dispatchThreadgroups(MTLSize(width: d, height: k, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
-        enc3.endEncoding()
-    }
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
-// MARK: - KMeans fused batch (single dispatch per iteration, double-buffered)
+// MARK: - KMeans batched: assign + partial_sum (cluster‑batched) + combine_normalize
 
 @_cdecl("skmetal_kmeans_batch_fused")
 public func skmetal_kmeans_batch_fused(
@@ -1518,20 +1135,12 @@ public func skmetal_kmeans_batch_fused(
     let cSize = k * d * MemoryLayout<Float>.stride
     let aSize = n * MemoryLayout<UInt32>.stride
 
-    guard let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
+    guard let assignPipeline = ctx.getPipeline(name: "kmeans_assign", functionName: "kmeans_assign"),
+          let partialPipeline = ctx.getPipeline(name: "kmeans_partial_sum", functionName: "kmeans_partial_sum"),
+          let combineNormPipeline = ctx.getPipeline(name: "kmeans_combine_normalize", functionName: "kmeans_combine_normalize"),
+          let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
           let cBuffer = wrapOutput(centroids, length: cSize, device: ctx.device),
           let aBuffer = wrapOutput(assignments, length: aSize, device: ctx.device) else {
-        return 1
-    }
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-    let gridSize = MTLSize(width: numGroups, height: 1, depth: 1)
-
-    var nU = UInt32(n), dU = UInt32(d), kU = UInt32(k), ngU = UInt32(numGroups)
-
-    guard let assignPartialPipeline = ctx.getPipeline(name: "kmeans_assign_partial", functionName: "kmeans_assign_partial"),
-          let combineNormPipeline = ctx.getPipeline(name: "kmeans_combine_normalize", functionName: "kmeans_combine_normalize") else {
         return 1
     }
 
@@ -1542,45 +1151,76 @@ public func skmetal_kmeans_batch_fused(
         return 1
     }
 
-    // Zero partial buffers once (subsequent iterations re-zero by the kernel)
-    let clearEnc = commandBuffer.makeBlitCommandEncoder()!
-    clearEnc.fill(buffer: pcBuffer, range: 0..<pcSize, value: 0)
-    clearEnc.fill(buffer: pnBuffer, range: 0..<pnSize, value: 0)
-    clearEnc.endEncoding()
+    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
+    let tgSize = MTLSize(width: 256, height: 1, depth: 1)
+    let assignGrid = MTLSize(width: n, height: 1, depth: 1)
+    let partialGrid = MTLSize(width: numGroups, height: 1, depth: 1)
+
+    var nU = UInt32(n), dU = UInt32(d), kU = UInt32(k), ngU = UInt32(numGroups)
+
+    // Max clusters that fit in 28 KB threadgroup memory for centroids + 256 uint for counts
+    let maxBatchClusters = min(256, max(1, 7168 / d))
 
     for _ in 0..<maxIter {
-        // 1. Assign + partial accumulate (fused, 1 dispatch)
+        // Zero partial buffers
+        let clearEnc = commandBuffer.makeBlitCommandEncoder()!
+        clearEnc.fill(buffer: pcBuffer, range: 0..<pcSize, value: 0)
+        clearEnc.fill(buffer: pnBuffer, range: 0..<pnSize, value: 0)
+        clearEnc.endEncoding()
+
+        // 1. Assign: compute nearest centroid for each point
         let enc1 = commandBuffer.makeComputeCommandEncoder()!
-        enc1.setComputePipelineState(assignPartialPipeline)
+        enc1.setComputePipelineState(assignPipeline)
         enc1.setBuffer(xBuffer, offset: 0, index: 0)
         enc1.setBuffer(cBuffer, offset: 0, index: 1)
-        enc1.setBuffer(pcBuffer, offset: 0, index: 2)
-        enc1.setBuffer(pnBuffer, offset: 0, index: 3)
-        enc1.setBuffer(aBuffer, offset: 0, index: 4)
-        enc1.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 5)
-        enc1.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 6)
-        enc1.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
-        enc1.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 8)
-        enc1.dispatchThreadgroups(gridSize, threadsPerThreadgroup: tgSize)
+        enc1.setBuffer(aBuffer, offset: 0, index: 2)
+        enc1.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        enc1.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
+        enc1.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 5)
+        enc1.dispatchThreadgroups(assignGrid, threadsPerThreadgroup: tgSize)
         enc1.endEncoding()
 
-        // 2. Combine + normalize (1 dispatch, overwrites cBuffer with new centroids)
-        let enc2 = commandBuffer.makeComputeCommandEncoder()!
-        enc2.setComputePipelineState(combineNormPipeline)
-        enc2.setBuffer(pcBuffer, offset: 0, index: 0)
-        enc2.setBuffer(pnBuffer, offset: 0, index: 1)
-        enc2.setBuffer(cBuffer, offset: 0, index: 2)
-        enc2.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 3)
-        enc2.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
-        enc2.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 5)
-        enc2.dispatchThreadgroups(MTLSize(width: d, height: k, depth: 1),
+        // 2. Partial sum: per-threadgroup accumulation, dispatched per cluster batch
+        var clusterStart = 0
+        while clusterStart < k {
+            let batchK = min(k - clusterStart, maxBatchClusters)
+            var csU = UInt32(clusterStart)
+            var bkU = UInt32(batchK)
+
+            let enc2 = commandBuffer.makeComputeCommandEncoder()!
+            enc2.setComputePipelineState(partialPipeline)
+            enc2.setBuffer(xBuffer, offset: 0, index: 0)
+            enc2.setBuffer(aBuffer, offset: 0, index: 1)
+            enc2.setBuffer(pcBuffer, offset: 0, index: 2)
+            enc2.setBuffer(pnBuffer, offset: 0, index: 3)
+            enc2.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 4)
+            enc2.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 5)
+            enc2.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 6)
+            enc2.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
+            enc2.setBytes(&csU, length: MemoryLayout<UInt32>.stride, index: 8)
+            enc2.setBytes(&bkU, length: MemoryLayout<UInt32>.stride, index: 9)
+            enc2.dispatchThreadgroups(partialGrid, threadsPerThreadgroup: tgSize)
+            enc2.endEncoding()
+
+            clusterStart += batchK
+        }
+
+        // 3. Combine + normalize: reduce partials to new centroids
+        let enc3 = commandBuffer.makeComputeCommandEncoder()!
+        enc3.setComputePipelineState(combineNormPipeline)
+        enc3.setBuffer(pcBuffer, offset: 0, index: 0)
+        enc3.setBuffer(pnBuffer, offset: 0, index: 1)
+        enc3.setBuffer(cBuffer, offset: 0, index: 2)
+        enc3.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 3)
+        enc3.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 4)
+        enc3.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 5)
+        enc3.dispatchThreadgroups(MTLSize(width: d, height: k, depth: 1),
                                   threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
-        enc2.endEncoding()
+        enc3.endEncoding()
     }
 
     commandBuffer.commit()
     commandBuffer.waitUntilCompleted()
-
     return 0
 }
 
@@ -2549,12 +2189,8 @@ public func skmetal_warmup() -> Int32 {
         ("center_columns", "center_columns"),
         ("compute_mindists", "compute_mindists"),
         ("kmeans_assign", "kmeans_assign"),
-        ("kmeans_partial_update", "kmeans_partial_update"),
-        ("kmeans_combine", "kmeans_combine"),
-        ("kmeans_normalize", "kmeans_normalize"),
+        ("kmeans_partial_sum", "kmeans_partial_sum"),
         ("kmeans_combine_normalize", "kmeans_combine_normalize"),
-        ("kmeans_assign_partial", "kmeans_assign_partial"),
-        ("kmeans_update", "kmeans_update"),
         ("knn_merge_topk", "knn_merge_topk"),
         ("knn_vote_classify", "knn_vote_classify"),
         ("knn_vote_regress", "knn_vote_regress"),

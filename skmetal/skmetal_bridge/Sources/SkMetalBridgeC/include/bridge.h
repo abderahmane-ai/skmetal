@@ -33,14 +33,8 @@ int skmetal_column_minmax(const void* X, void* min_out, void* max_out, size_t n,
 int skmetal_irls_weight(const void* p, void* weights, size_t n);
 int skmetal_scale_rows(const void* X, const void* weights, void* output, size_t n, size_t d);
 
-int skmetal_kmeans_update(const void* X, const void* assignments, void* centroids, void* counts, size_t n, size_t d, size_t k);
 int skmetal_kmeans_assign(const void* X, const void* centroids, void* assignments, size_t n, size_t d, size_t k);
-int skmetal_kmeans_partial_update(const void* X, const void* assignments, void* partial_centroids, void* partial_counts, size_t n, size_t d, size_t k, size_t num_groups);
-int skmetal_kmeans_combine(const void* partial_centroids, const void* partial_counts, void* centroids, void* counts, size_t k, size_t d, size_t num_groups);
-int skmetal_kmeans_normalize(void* centroids, const void* counts, size_t k, size_t d);
 int skmetal_kmeans_combine_normalize(const void* partial_centroids, const void* partial_counts, void* centroids, size_t k, size_t d, size_t num_groups);
-int skmetal_kmeans_iter(const void* X, const void* centroids_in, void* assignments, void* partial_centroids, void* partial_counts, void* centroids_out, size_t n, size_t d, size_t k, size_t num_groups);
-int skmetal_kmeans_batch(const void* X, void* centroids, void* assignments, void* partial_centroids, void* partial_counts, size_t n, size_t d, size_t k, size_t num_groups, size_t max_iter);
 int skmetal_kmeans_batch_fused(const void* X, void* centroids, void* assignments, size_t n, size_t d, size_t k, size_t num_groups, size_t max_iter);
 
 int skmetal_sigmoid(const void* input, void* output, size_t n);
