@@ -24,14 +24,6 @@
     "speedup": 0.91
   },
   {
-    "estimator": "PCA",
-    "n_samples": 20000,
-    "n_features": 500,
-    "cpu_time": 0.020,
-    "gpu_time": 0.021,
-    "speedup": 0.95
-  },
-  {
     "estimator": "KMeans",
     "n_samples": 50000,
     "n_features": 50,

@@ -34,14 +34,21 @@ jobs:
         pip install ruff
         ruff check skmetal/ tests/
 
-    - name: Run correctness tests
+    - name: Run all tests
       run: |
-        pytest tests/test_correctness.py -v --timeout=120
+        pytest tests/ -v --timeout=120
 
-    - name: Run dispatch tests
+    - name: Benchmark regression check
       run: |
-        pytest tests/test_dispatch.py -v
+        python benchmarks/check_regression.py
 
-    - name: Run benchmarks
+    - name: Update baseline (main only)
+      if: github.ref == 'refs/heads/main'
       run: |
-        python benchmarks/benchmark_suite.py
+        python benchmarks/check_regression.py --update
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add benchmarks/baseline.json
+        git diff --quiet && git diff --staged --quiet || \
+          git commit -m "chore: update benchmark baseline [skip ci]"
+        git push
