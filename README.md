@@ -143,20 +143,26 @@ numpy array -> np.ctypes.data -> UnsafeMutableRawPointer -> MTLBuffer(bytesNoCop
                    +--------- same physical memory ---------------------+
 ```
 
-### Metal kernels (8 files)
+### Metal kernels (14 files)
 
 | Kernel file | Operations |
 |-------------|------------|
 | `ReductionKernels.metal` | `reduce_sum`, `reduce_mean_var` (Welford) |
-| `KMeansKernels.metal` | assign, partial_update, combine, normalize |
-| `IrlsKernels.metal` | `irls_weight`, `scale_rows` |
+| `ArgminKernels.metal` | `argmin_rows` |
+| `KMeansKernels.metal` | assign, partial_sum, combine, normalize, batch fused |
+| `KNNKernels.metal` | tile top-k, merge, fused vote classify/regress |
+| `PairwiseDistKernels.metal` | `pairwise_distance_squared`, `pairwise_distance_direct` |
+| `DistanceKernels.metal` | `row_norm_sq`, `compute_mindists`, `distance_correct` |
+| `IrlsKernels.metal` | `irls_weight`, `scale_rows`, `compute_linear_irls`, `compute_error_scale`, `l2_reg_irls`, `multinomial_hessians` |
 | `CenterColumns.metal` | `column_means`, `center_columns` |
-| `ElementWiseKernels.metal` | `sigmoid`, `subtract`, `add_scalar`, `axpy`, `norm_sq` |
+| `ElementWiseKernels.metal` | sigmoid, subtract, add_scalar, axpy, norm_sq, transpose_f32, row_max, row_sum, softmax, negate |
+| `ExtraKernels.metal` | `soft_threshold`, `column_transform`, `scale_f32`, `sv_init`, `sv_hook`, `sv_shortcut` |
 | `StandardScalerKernels.metal` | `scaler_fit` (fused Welford) |
 | `GemmKernels.metal` | `gemm_simple` (fallback) |
 | `MinMaxKernels.metal` | `column_minmax` (threadgroup tree reduction) |
+| `TreeKernels.metal` | `tree_predict`, `tree_predict_all` |
 
-### Swift bridge (33 C-callable functions)
+### Swift bridge (47 C-callable functions)
 
 All `skmetal_*` functions use `@_cdecl` for direct ctypes export. Every function accepts raw pointers.
 
@@ -165,7 +171,7 @@ All `skmetal_*` functions use `@_cdecl` for direct ctypes export. Every function
 ```
 skmetal/
   skmetal/
-    _bridge.py           ctypes -> Swift (33 functions)
+    _bridge.py           ctypes -> Swift (47 functions)
     _config.py           Config dataclass
     _dispatch.py         estimator registry + wrapping
     accelerate.py        @accelerate decorator + accelerate_context
@@ -182,16 +188,16 @@ skmetal/
     utils.py
   skmetal_bridge/        Swift + Metal
     Sources/SkMetalBridge/
-      Bridge.swift       33 @_cdecl exports
+      Bridge.swift       47 @_cdecl exports
       MetalContext.swift
 
-      Kernels/*.metal    8 Metal kernel files
+      Kernels/*.metal    14 Metal kernel files
   benchmarks/
     run_compare.py       benchmark runner
     benchmark_suite.py   full suite
     baseline.json
   tests/
-    test_correctness.py  8 correctness tests
+    test_correctness.py  18 correctness tests (16 parametrized + 2 standalone)
     test_dispatch.py     7 dispatch tests
   build.sh
   pyproject.toml
@@ -206,8 +212,8 @@ skmetal/
 ## Tests
 
 ```
-test_correctness: 8/8 pass - all GPU estimators match sklearn CPU
-test_dispatch:    6/7 pass - registry, wrapping, pipeline, decorator
+test_correctness: 18/18 pass - 16 estimator parametrizations + pipeline + device info
+test_dispatch:    7/7 pass - registry, wrapping, pipeline, decorator
 ```
 
 ---
