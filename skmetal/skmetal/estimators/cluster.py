@@ -2,12 +2,14 @@ import numpy as np
 from sklearn.utils.validation import check_random_state
 from ._base import BaseGPUEstimator
 from .._bridge import (
+    gemm,
     pairwise_distance,
     kmeans_assign,
     compute_mindists,
     kmeans_batch_fused,
     sv_init, sv_hook, sv_shortcut,
 )
+
 
 
 class MetalKMeans(BaseGPUEstimator):
@@ -116,10 +118,18 @@ class MetalKMeans(BaseGPUEstimator):
         return km.cluster_centers_.astype(np.float32), km.labels_.astype(np.uint32)
 
     def transform(self, X):
+        """Return distances from each sample to each cluster centre (n_samples × n_clusters)."""
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_transform(X)
-        return pairwise_distance(X)
+        centers = self._estimator.cluster_centers_  # (k, d)
+        # ||x_i - c_j||^2 = ||x_i||^2 + ||c_j||^2 - 2 * x_i · c_j
+        X_norms = np.einsum("ij,ij->i", X, X)[:, np.newaxis]            # (n, 1)
+        C_norms = np.einsum("ij,ij->i", centers, centers)[np.newaxis, :]  # (1, k)
+        cross = gemm(X, np.ascontiguousarray(centers.T))                 # (n, k)
+        dists_sq = np.maximum(X_norms + C_norms - 2.0 * cross, 0.0)
+        return np.sqrt(dists_sq)
+
 
 
 class MetalDBSCAN(BaseGPUEstimator):
@@ -133,17 +143,19 @@ class MetalDBSCAN(BaseGPUEstimator):
         if n_core <= 1:
             return np.zeros(n_core, dtype=np.int32)
 
-        edges_list = []
-        for i in core_indices:
-            for j in core_indices:
-                if j > i and neighbor_mask[i, j]:
-                    edges_list.append(i)
-                    edges_list.append(j)
-
-        if not edges_list:
+        # Vectorised edge extraction — avoids O(n_core²) Python loop.
+        # sub[i,j] == True means core_indices[i] is a neighbour of core_indices[j]
+        sub = neighbor_mask[np.ix_(core_indices, core_indices)]
+        # Upper-triangular pairs only (undirected graph)
+        r, c = np.where(np.triu(sub, k=1))
+        if r.size == 0:
             return np.zeros(n_core, dtype=np.int32)
-
-        edges = np.array(edges_list, dtype=np.int32)
+        # Map local indices back to global node ids
+        src = core_indices[r].astype(np.int32)
+        dst = core_indices[c].astype(np.int32)
+        edges = np.empty(src.size + dst.size, dtype=np.int32)
+        edges[0::2] = src
+        edges[1::2] = dst
 
         parent = np.empty(n_total, dtype=np.int32)
         sv_init(parent, n_total)

@@ -1,17 +1,21 @@
 """@accelerate decorator for enabling GPU acceleration."""
 
+import threading
 import warnings
 from functools import wraps
 from sklearn.pipeline import Pipeline
 from ._dispatch import _wrap_estimator, _wrap_pipeline
-from ._config import get_config
+from ._config import _get_device, _set_thread_device
+
+# Thread-local storage for nested accelerate_context stacks
+_local = threading.local()
 
 
 def accelerate(obj=None):
     """
     Enable GPU acceleration for scikit-learn estimators.
 
-    Can be used as a decorator (recommended) or as a function call:
+    Can be used as a decorator (recommended) or as a function call::
 
         @accelerate
         def model():
@@ -21,7 +25,7 @@ def accelerate(obj=None):
         def pipeline():
             return Pipeline([("scaler", StandardScaler()), ("clf", LogisticRegression())])
 
-    Function-call form also supported:
+    Function-call form also supported::
 
         model = accelerate(LinearRegression())
     """
@@ -103,16 +107,24 @@ class _Accelerator:
 
 
 class accelerate_context:
-    """Context manager to temporarily enable/disable acceleration."""
+    """Context manager to temporarily enable/disable acceleration.
+
+    Thread-safe: each thread maintains its own device-context stack so that
+    concurrent calls from different threads cannot corrupt each other's state.
+    """
 
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
-        self.prev = None
 
     def __enter__(self):
-        self.prev = get_config().device
-        get_config().device = "gpu" if self.enabled else "cpu"
+        # Per-thread stack — push current device, set new one.
+        if not hasattr(_local, "device_stack"):
+            _local.device_stack = []
+        _local.device_stack.append(_get_device())
+        _set_thread_device("gpu" if self.enabled else "cpu")
         return self
 
     def __exit__(self, *args):
-        get_config().device = self.prev
+        if hasattr(_local, "device_stack") and _local.device_stack:
+            prev = _local.device_stack.pop()
+            _set_thread_device(prev)

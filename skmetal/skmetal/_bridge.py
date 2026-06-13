@@ -1,7 +1,17 @@
 """Python ctypes bridge to the SkMetalBridge dynamic library."""
 import ctypes
+import platform
+import sys
 import numpy as np
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Platform detection — skmetal only works on Apple Silicon macOS 14+.
+# We expose METAL_AVAILABLE so callers can gate behaviour without crashing.
+# ---------------------------------------------------------------------------
+
+def _is_apple_silicon() -> bool:
+    return sys.platform == "darwin" and platform.machine() == "arm64"
 
 
 def _find_library() -> str:
@@ -22,7 +32,28 @@ def _find_library() -> str:
         "Then copy the dylib to ~/.local/lib/ or run: skmetal_bridge/build.sh"
     )
 
-_lib = ctypes.CDLL(_find_library())
+
+def _unavailable(*args, **kwargs):
+    raise RuntimeError(
+        "skmetal GPU acceleration requires Apple Silicon (M1+) running macOS 14+. "
+        "This device/OS is not supported. All operations fall back to scikit-learn CPU."
+    )
+
+
+try:
+    if not _is_apple_silicon():
+        raise RuntimeError("Not Apple Silicon — skipping dylib load.")
+    _lib = ctypes.CDLL(_find_library())
+    METAL_AVAILABLE = True
+except Exception as _metal_err:  # noqa: BLE001
+    import warnings
+    warnings.warn(
+        f"skmetal: Metal GPU not available ({_metal_err}). "
+        "All estimators will run on CPU via scikit-learn.",
+        stacklevel=2,
+    )
+    _lib = None
+    METAL_AVAILABLE = False
 
 
 def _bridge_call(c_func, *args):
@@ -97,21 +128,22 @@ _BRIDGE_REGISTRY = [
     ("skmetal_tree_predict_all", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
 ]
 
-for _name, *_argtypes in _BRIDGE_REGISTRY:
-    _func = getattr(_lib, _name)
-    _func.argtypes = list(_argtypes)
-    _func.restype = ctypes.c_int
+if METAL_AVAILABLE:
+    for _name, *_argtypes in _BRIDGE_REGISTRY:
+        _func = getattr(_lib, _name)
+        _func.argtypes = list(_argtypes)
+        _func.restype = ctypes.c_int
 
-# device_info, init, warmup have unique argtypes not in registry
-_lib.skmetal_device_info.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_size_t)]
-_lib.skmetal_device_info.restype = ctypes.c_int
-_lib.skmetal_init.argtypes = []
-_lib.skmetal_init.restype = ctypes.c_int
-_lib.skmetal_warmup.argtypes = []
-_lib.skmetal_warmup.restype = ctypes.c_int
+    # device_info, init, warmup have unique argtypes not in registry
+    _lib.skmetal_device_info.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_size_t)]
+    _lib.skmetal_device_info.restype = ctypes.c_int
+    _lib.skmetal_init.argtypes = []
+    _lib.skmetal_init.restype = ctypes.c_int
+    _lib.skmetal_warmup.argtypes = []
+    _lib.skmetal_warmup.restype = ctypes.c_int
 
-_lib.skmetal_init()
-_lib.skmetal_warmup()
+    _lib.skmetal_init()
+    _lib.skmetal_warmup()
 
 
 # ============================================================
@@ -304,6 +336,11 @@ def fista_fit(X: np.ndarray, y: np.ndarray, alpha: float, l1_ratio: float = 1.0,
 
 def device_info() -> dict:
     """Get Metal device information."""
+    if not METAL_AVAILABLE:
+        raise RuntimeError(
+            "skmetal: Metal is not available on this device. "
+            "device_info() requires Apple Silicon + macOS 14+."
+        )
     name_ptr = ctypes.c_char_p()
     max_threads = ctypes.c_size_t()
     err = _lib.skmetal_device_info(ctypes.byref(name_ptr), ctypes.byref(max_threads))
@@ -313,6 +350,7 @@ def device_info() -> dict:
         "name": name_ptr.value.decode("utf-8") if name_ptr.value else "unknown",
         "max_threads_per_threadgroup": max_threads.value,
     }
+
 
 
 def knn_vote_classify(indices: np.ndarray, train_labels: np.ndarray,

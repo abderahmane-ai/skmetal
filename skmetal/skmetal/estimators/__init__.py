@@ -1,7 +1,7 @@
 """GPU-accelerated estimators for scikit-learn."""
 
 from ._base import BaseGPUEstimator
-from ._registry import GPU_ESTIMATORS, PIPELINE_PATTERNS
+from ._registry import GPU_REGISTRY, GPU_ESTIMATORS
 from .linear_model import MetalLinearRegression, MetalRidge, MetalLogisticRegression, MetalLasso, MetalElasticNet
 
 from .cluster import MetalKMeans, MetalDBSCAN
@@ -12,8 +12,9 @@ from .ensemble import MetalHistGradientBoostingRegressor, MetalHistGradientBoost
 
 __all__ = [
     "BaseGPUEstimator",
+    "GPU_REGISTRY",
     "GPU_ESTIMATORS",
-    "PIPELINE_PATTERNS",
+
     "MetalLinearRegression",
     "MetalRidge",
     "MetalLogisticRegression",

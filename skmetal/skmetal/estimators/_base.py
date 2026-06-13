@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_array
-from .._config import get_config
+from .._config import get_config, _get_device
 
 
 class BaseGPUEstimator(BaseEstimator):
@@ -19,7 +19,8 @@ class BaseGPUEstimator(BaseEstimator):
 
     def _should_use_gpu(self, X):
         config = get_config()
-        if config.device == "cpu":
+        # Use thread-local device so accelerate_context is truly per-thread.
+        if _get_device() == "cpu":
             return False
         if hasattr(X, "nnz"):
             return False
@@ -34,6 +35,7 @@ class BaseGPUEstimator(BaseEstimator):
             if n < min_rows or d < min_cols:
                 return False
         return True
+
 
     def _fallback_fit(self, X, y, **kwargs):
         self._estimator.fit(X, y, **kwargs)

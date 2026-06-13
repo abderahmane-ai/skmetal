@@ -69,13 +69,10 @@ class MetalRobustScaler(BaseGPUEstimator):
             return self._fallback_fit(X, y, **kwargs)
 
         n_features = X.shape[1]
-        q1 = np.empty(n_features, dtype=np.float32)
-        med = np.empty(n_features, dtype=np.float32)
-        q3 = np.empty(n_features, dtype=np.float32)
 
-        for j in range(n_features):
-            col = X[:, j]
-            q1[j], med[j], q3[j] = np.percentile(col, [25, 50, 75])
+        # Vectorised: compute all column quantiles in one numpy call instead of a
+        # Python loop. np.percentile with axis=0 operates across rows per column.
+        q1, med, q3 = np.percentile(X, [25.0, 50.0, 75.0], axis=0).astype(np.float32)
 
         iqr = q3 - q1
         iqr[iqr < 1e-15] = 1.0
@@ -85,6 +82,7 @@ class MetalRobustScaler(BaseGPUEstimator):
         self._estimator.n_features_in_ = n_features
         self._fitted = True
         return self
+
 
     def transform(self, X):
         X = self._validate_data(X)[0]

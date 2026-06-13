@@ -77,9 +77,9 @@ def test_accelerate_decorator():
 
 def test_accelerate_context_manager():
     """Context manager should toggle device config."""
+    from skmetal._config import set_device, get_config
+    set_device("gpu")
     with skmetal.accelerate_context(enabled=False):
-        from skmetal._config import get_config
         assert get_config().device == "cpu"
 
-    from skmetal._config import get_config
     assert get_config().device == "gpu"

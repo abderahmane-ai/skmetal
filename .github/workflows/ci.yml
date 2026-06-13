@@ -54,12 +54,15 @@ jobs:
     - name: Lint with ruff
       run: |
         pip install ruff
-        ruff check skmetal/ tests/
+        # skmetal/ is the Python package root; tests/ is at repo root
+        ruff check skmetal/skmetal/ tests/
 
     - name: Run all tests
       run: |
+        # Run from repo root so pytest finds tests/ and the installed package
         pytest tests/ -v --timeout=120
 
     - name: Run benchmarks (no regression check)
       run: |
         python benchmarks/run_compare.py || true
+

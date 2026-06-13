@@ -292,8 +292,10 @@ public func skmetal_row_norm_sq(
     encoder.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 2)
     encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 3)
 
-    let threadgroupSize = MTLSize(width: 1, height: 1, depth: 1)
-    let gridSize = MTLSize(width: n, height: 1, depth: 1)
+    // Use 256 threads per threadgroup for full GPU parallelism.
+    // Previously used MTLSize(1,1,1) which wasted 99.6% of available threads.
+    let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
+    let gridSize = MTLSize(width: (n + 255) / 256, height: 1, depth: 1)
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
     encoder.endEncoding()
 
