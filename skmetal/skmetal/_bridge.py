@@ -584,15 +584,18 @@ def gemm_f16(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
 
 def logreg_irls_fit(X: np.ndarray, y: np.ndarray, C: float, tol: float,
                      max_iter: int, fit_intercept: bool) -> tuple[np.ndarray, int]:
-    """Full binary IRLS fit loop in Swift. Returns (coef, n_iter)."""
+    """Full binary IRLS fit loop in Swift. Returns (coef, n_iter).
+
+    Note: ``fit_intercept`` is passed through to the bridge (currently unused
+    there). The caller is responsible for appending the ones column to X.
+    """
     n, p = X.shape
-    pe = p + 1 if fit_intercept else p
-    coef = np.empty(pe, dtype=np.float32, order="C")
+    coef = np.empty(p, dtype=np.float32, order="C")
     n_iter_out = ctypes.c_int32(0)
     _bridge_call(_lib.skmetal_logreg_irls_fit,
                  X, y, coef, ctypes.c_float(C), ctypes.c_float(tol),
                  ctypes.c_int32(max_iter), ctypes.c_int32(int(fit_intercept)),
-                 ctypes.c_size_t(n), ctypes.c_size_t(pe),
+                 ctypes.c_size_t(n), ctypes.c_size_t(p),
                  ctypes.byref(n_iter_out))
     return coef, n_iter_out.value
 

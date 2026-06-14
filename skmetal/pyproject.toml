@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skmetal"
-version = "0.3.1"
+version = "0.3.2"
 description = "GPU-accelerated scikit-learn via Apple Metal"
 readme = "README.md"
 authors = [
