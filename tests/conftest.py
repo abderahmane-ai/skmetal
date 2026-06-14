@@ -1,6 +1,6 @@
 """Shared fixtures for all skmetal tests."""
 import pytest
-from skmetal._config import get_config, PER_ESTIMATOR_THRESHOLDS
+from skmetal._config import get_config, PER_ESTIMATOR_THRESHOLDS, _set_thread_device
 
 
 @pytest.fixture(autouse=True)
@@ -8,6 +8,7 @@ def reset_config():
     """Reset config to defaults before every test to avoid cross-test pollution."""
     cfg = get_config()
     cfg.device = "gpu"
+    _set_thread_device(None)
     cfg.threshold = 1
     cfg.dtype = "float32"
     cfg.verbose = False

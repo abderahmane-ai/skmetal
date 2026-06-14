@@ -9,6 +9,7 @@ from .naive_bayes import MetalGaussianNB
 from .preprocessing import MetalStandardScaler, MetalMinMaxScaler, MetalRobustScaler
 from .neighbors import MetalKNeighborsClassifier, MetalKNeighborsRegressor, MetalNearestNeighbors
 from .ensemble import MetalHistGradientBoostingRegressor, MetalHistGradientBoostingClassifier
+from .decomposition import MetalTruncatedSVD
 from .svm import MetalSVC, MetalSVR
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
 
     "MetalSVC",
     "MetalSVR",
+    "MetalTruncatedSVD",
 ]

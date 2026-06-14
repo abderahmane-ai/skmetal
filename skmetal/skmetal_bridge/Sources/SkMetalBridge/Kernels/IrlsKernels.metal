@@ -107,7 +107,7 @@ kernel void multinomial_hessians(
 
     float h = 0.0f;
     for (uint i = 0; i < n; i++) {
-        float pc = exp_prob[i * C + c] / row_sums[i];
+        float pc = exp_prob[i * C + c] / fmax(row_sums[i], 1e-38f);
         float w = pc * (1.0f - pc);
         h += X[i * p + f] * X[i * p + g] * w;
     }

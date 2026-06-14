@@ -33,6 +33,7 @@ kernel void knn_select_tile_topk(
 
         for (uint j = 0; j < n_t; j++) {
             float dist = r_q + r_train[j] - 2.0f * D_row[j];
+            if (dist < 0.0f) dist = 0.0f;
 
             if (dist >= my_vals[k - 1]) continue;
 
@@ -79,6 +80,10 @@ kernel void knn_vote_classify(
             max_count = counts[j];
             best_label = int(j);
         }
+    }
+    if (max_count == 0) {
+        predictions[tid] = train_labels[indices[tid * k]];
+        return;
     }
     predictions[tid] = (float)best_label;
 }
@@ -278,6 +283,10 @@ kernel void knn_vote_classify_weighted(
         }
     }
 
+    if (n_unique == 0) {
+        predictions[tid] = train_labels[indices[tid * k]];
+        return;
+    }
     float max_w = 0.0f;
     int best = 0;
     for (uint j = 0; j < n_unique; j++) {

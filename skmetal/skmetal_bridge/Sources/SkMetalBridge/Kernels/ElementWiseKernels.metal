@@ -75,6 +75,7 @@ kernel void transpose_f32(
 }
 
 // Row-wise max: for each row, find maximum value across columns
+// Uses float4 vectorized loads for ~2x bandwidth on aligned rows.
 kernel void row_max(
     device const float* matrix [[buffer(0)]],
     device float* max_vals [[buffer(1)]],
@@ -85,13 +86,24 @@ kernel void row_max(
     if (tid >= n) return;
     float mx = -INFINITY;
     uint base = tid * n_cols;
-    for (uint j = 0; j < n_cols; j++) {
+    uint j = 0;
+    if (n_cols >= 4) {
+        for (; j + 4 <= n_cols; j += 4) {
+            float4 v = *reinterpret_cast<device const float4*>(matrix + base + j);
+            mx = max(mx, v.x);
+            mx = max(mx, v.y);
+            mx = max(mx, v.z);
+            mx = max(mx, v.w);
+        }
+    }
+    for (; j < n_cols; j++) {
         mx = max(mx, matrix[base + j]);
     }
     max_vals[tid] = mx;
 }
 
 // Row-wise sum: for each row, compute sum of values
+// Uses float4 vectorized loads for ~2x bandwidth on aligned rows.
 kernel void row_sum(
     device const float* matrix [[buffer(0)]],
     device float* sums [[buffer(1)]],
@@ -102,7 +114,14 @@ kernel void row_sum(
     if (tid >= n) return;
     float s = 0.0f;
     uint base = tid * n_cols;
-    for (uint j = 0; j < n_cols; j++) {
+    uint j = 0;
+    if (n_cols >= 4) {
+        for (; j + 4 <= n_cols; j += 4) {
+            float4 v = *reinterpret_cast<device const float4*>(matrix + base + j);
+            s += v.x + v.y + v.z + v.w;
+        }
+    }
+    for (; j < n_cols; j++) {
         s += matrix[base + j];
     }
     sums[tid] = s;
@@ -117,7 +136,7 @@ kernel void softmax_exp(
     constant uint& n_cols [[buffer(4)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
-    uint row = tid.x, col = tid.y;
+    uint row = tid.y, col = tid.x;
     if (row >= n || col >= n_cols) return;
     output[row * n_cols + col] = exp(matrix[row * n_cols + col] - max_vals[row]);
 }
@@ -132,7 +151,7 @@ kernel void softmax_normalize_residual(
     constant uint& n_cols [[buffer(5)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
-    uint row = tid.x, col = tid.y;
+    uint row = tid.y, col = tid.x;
     if (row >= n || col >= n_cols) return;
     uint idx = row * n_cols + col;
     float p = prob[idx] / row_sums[row];
@@ -182,9 +201,9 @@ kernel void svc_predict_binary(
     uint tid [[thread_position_in_grid]]
 ) {
     if (tid >= n_test) return;
-    float s = 0.0;
+    float s = 0.0f;
     for (uint k = 0; k < n_sv; k++) {
-        float d2 = 0.0;
+        float d2 = 0.0f;
         for (uint l = 0; l < d; l++) {
             float diff = X_test[tid * d + l] - X_sv[k * d + l];
             d2 += diff * diff;
@@ -237,7 +256,7 @@ kernel void softmax_residual(
     constant uint& n_cols [[buffer(4)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
-    uint row = tid.x, col = tid.y;
+    uint row = tid.y, col = tid.x;
     if (row >= n || col >= n_cols) return;
     uint idx = row * n_cols + col;
     uint true_class = uint(y[row]);

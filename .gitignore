@@ -28,6 +28,7 @@ DerivedData/
 *~
 .DS_Store
 .opencode/
+.mimocode/
 
 # Environment
 .env
@@ -44,6 +45,7 @@ graphify-out/
 # Agent instructions (not committed, local to each session)
 AGENTS.md
 .agents/
+GPU_ACCELERATION_RESEARCH.md
 
 # Removed scaffolding
 skmetal_core/

@@ -47,29 +47,63 @@ kernel void scaler_fit(
         }
     }
 
-    // Tree reduce across threads for each column in this block
-    threadgroup float tg_mean[2048];
-    threadgroup float tg_m2[2048];
-    threadgroup uint tg_count[2048];
-
+    // Level 1: SIMD-group Welford merge via shuffle
     for (uint b = 0; b < active_cols; b++) {
-        tg_mean[b * lsz + lid] = local_mean[b];
-        tg_m2[b * lsz + lid] = local_m2[b];
-        tg_count[b * lsz + lid] = local_count[b];
+        float m = local_mean[b];
+        float m2 = local_m2[b];
+        uint cnt = local_count[b];
+        for (uint offset = 16; offset > 0; offset >>= 1) {
+            float peer_m = simd_shuffle_down(m, offset);
+            float peer_m2 = simd_shuffle_down(m2, offset);
+            uint peer_cnt = simd_shuffle_down(cnt, offset);
+            if (peer_cnt > 0 && cnt > 0) {
+                float delta = peer_m - m;
+                uint new_cnt = cnt + peer_cnt;
+                m += delta * (float)peer_cnt / (float)new_cnt;
+                m2 = m2 + peer_m2 + delta * delta * (float)cnt * (float)peer_cnt / (float)new_cnt;
+                cnt = new_cnt;
+            } else if (peer_cnt > 0) {
+                m = peer_m; m2 = peer_m2; cnt = peer_cnt;
+            }
+        }
+        // Broadcast lane 0's result to all lanes in the SIMD group
+        local_mean[b] = simd_broadcast(m, 0);
+        local_m2[b] = simd_broadcast(m2, 0);
+        local_count[b] = simd_broadcast(cnt, 0);
+    }
+
+    // Level 2: SIMD group 0 writes per-column results to threadgroup
+    uint lane_id = lid & 31;
+    uint num_simd_groups = (lsz + 31) / 32;
+    threadgroup float tg_mean[64];
+    threadgroup float tg_m2[64];
+    threadgroup uint tg_count[64];
+
+    if (lane_id == 0) {
+        uint sg_idx = lid >> 5;
+        if (sg_idx < num_simd_groups) {
+            for (uint b = 0; b < active_cols; b++) {
+                tg_mean[b * num_simd_groups + sg_idx] = local_mean[b];
+                tg_m2[b * num_simd_groups + sg_idx] = local_m2[b];
+                tg_count[b * num_simd_groups + sg_idx] = local_count[b];
+            }
+        }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (uint stride = lsz / 2; stride > 0; stride >>= 1) {
+    // Level 3: tree-reduce per column across SIMD groups
+    for (uint stride = num_simd_groups / 2; stride > 0; stride >>= 1) {
         if (lid < stride) {
             for (uint b = 0; b < active_cols; b++) {
-                uint idx_a = b * lsz + lid;
-                uint idx_b = idx_a + stride;
+                uint base = b * num_simd_groups;
+                uint idx_a = base + lid;
+                uint idx_b = base + lid + stride;
                 uint a_c = tg_count[idx_a];
                 uint b_c = tg_count[idx_b];
                 if (b_c > 0) {
                     float a_m = tg_mean[idx_a];
-                    float b_m = tg_mean[idx_b];
                     float a_m2 = tg_m2[idx_a];
+                    float b_m = tg_mean[idx_b];
                     float b_m2 = tg_m2[idx_b];
                     float delta = b_m - a_m;
                     uint new_count = a_c + b_c;
@@ -86,8 +120,9 @@ kernel void scaler_fit(
 
     if (lid == 0) {
         for (uint b = 0; b < active_cols; b++) {
-            float m = tg_mean[b * lsz];
-            float v = tg_m2[b * lsz] / (float)tg_count[b * lsz];
+            uint base = b * num_simd_groups;
+            float m = tg_mean[base];
+            float v = tg_m2[base] / (float)tg_count[base];
             mean_out[col_start + b] = m;
             var_out[col_start + b] = v;
         }

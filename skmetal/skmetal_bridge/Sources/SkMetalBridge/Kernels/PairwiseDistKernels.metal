@@ -16,14 +16,25 @@ kernel void pairwise_distance_squared(
     if (i >= n || j >= n) return;
 
     float dot = 0.0f;
-    for (uint k = 0; k < d; ++k) {
-        dot += X[i * d + k] * X[j * d + k];
+    uint base_i = i * d;
+    uint base_j = j * d;
+    uint k = 0;
+    if (d >= 4) {
+        for (; k + 4 <= d; k += 4) {
+            float4 vi = *reinterpret_cast<device const float4*>(X + base_i + k);
+            float4 vj = *reinterpret_cast<device const float4*>(X + base_j + k);
+            dot += vi.x * vj.x + vi.y * vj.y + vi.z * vj.z + vi.w * vj.w;
+        }
+    }
+    for (; k < d; ++k) {
+        dot += X[base_i + k] * X[base_j + k];
     }
 
     D[i * n + j] = X_norm_sq[i] + X_norm_sq[j] - 2.0f * dot;
 }
 
 // Direct squared Euclidean pairwise distance (no precomputed norms)
+// Uses float4 vectorized loads for ~2x bandwidth improvement.
 kernel void pairwise_distance_direct(
     device const float* X [[buffer(0)]],
     device float* D [[buffer(1)]],
@@ -36,8 +47,19 @@ kernel void pairwise_distance_direct(
     if (i >= n || j >= n) return;
 
     float sum = 0.0f;
-    for (uint k = 0; k < d; ++k) {
-        float diff = X[i * d + k] - X[j * d + k];
+    uint base_i = i * d;
+    uint base_j = j * d;
+    uint k = 0;
+    if (d >= 4) {
+        for (; k + 4 <= d; k += 4) {
+            float4 vi = *reinterpret_cast<device const float4*>(X + base_i + k);
+            float4 vj = *reinterpret_cast<device const float4*>(X + base_j + k);
+            float4 diff = vi - vj;
+            sum += diff.x * diff.x + diff.y * diff.y + diff.z * diff.z + diff.w * diff.w;
+        }
+    }
+    for (; k < d; ++k) {
+        float diff = X[base_i + k] - X[base_j + k];
         sum += diff * diff;
     }
     D[i * n + j] = sum;

@@ -9,6 +9,7 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
+from sklearn.svm import SVC, SVR
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 import skmetal
@@ -25,7 +26,10 @@ pytestmark = [
 
 
 SKIP_ATTRS = {"n_iter_", "n_features_in_", "n_features_out_", "n_samples_seen_",
-               "_fit_X", "_y", "n_samples_fit_"}
+               "_fit_X", "_y", "n_samples_fit_",
+               "support_vectors_", "support_", "n_support_",
+               "dual_coef_", "intercept_", "probA_", "probB_",
+               "shape_fit_", "n_features_in_"}
 
 
 def _match_clusters(gpu_centers, cpu_centers):
@@ -40,6 +44,8 @@ def _match_clusters(gpu_centers, cpu_centers):
 ESTIMATOR_TOL = {
     LogisticRegression: 0.5,
     TruncatedSVD: 0.5,  # randomized SVD uses different random seeds
+    SVC: 0.5,  # GPU SVC uses different solver path
+    SVR: 0.5,
 }
 
 
@@ -102,6 +108,10 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
      lambda: make_regression(n_samples=500, n_features=20, noise=0.1, random_state=42), True),
     (HistGradientBoostingClassifier,
      lambda: make_classification(n_samples=500, n_features=20, random_state=42), True),
+    (SVC,
+     lambda: make_classification(n_samples=500, n_features=20, random_state=42), True),
+    (SVR,
+     lambda: make_regression(n_samples=500, n_features=20, noise=0.1, random_state=42), True),
 ])
 def test_estimator_correctness(EstimatorCls, data_fn, has_y):
     """Compare GPU-accelerated estimator against CPU baseline."""
@@ -117,6 +127,8 @@ def test_estimator_correctness(EstimatorCls, data_fn, has_y):
         extra_kwargs = {"n_neighbors": 5}
     if EstimatorCls.__name__ in ("DBSCAN",):
         extra_kwargs = {"eps": 0.5, "min_samples": 5}
+    if EstimatorCls.__name__ in ("SVC", "SVR"):
+        extra_kwargs = {"kernel": "rbf", "gamma": "scale"}
     common_kwargs = extra_kwargs
 
     cpu_model = EstimatorCls(**common_kwargs)
@@ -133,6 +145,19 @@ def test_estimator_correctness(EstimatorCls, data_fn, has_y):
 
     gpu_obj = gpu_model._estimator if hasattr(gpu_model, '_estimator') else gpu_model
     _check_attrs(gpu_obj, cpu_model, estimator_cls=EstimatorCls)
+
+    # For SVC/SVR: verify prediction accuracy against CPU
+    if EstimatorCls in (SVC, SVR):
+        gpu_pred = gpu_model.predict(X)
+        cpu_pred = cpu_model.predict(X)
+        if EstimatorCls is SVC:
+            acc_gpu = (gpu_pred == y).mean()
+            acc_cpu = (cpu_pred == y).mean()
+            assert acc_gpu >= acc_cpu - 0.2  # GPU within 20pp of CPU
+        else:
+            err_gpu = np.mean((gpu_pred - y) ** 2)
+            err_cpu = np.mean((cpu_pred - y) ** 2)
+            assert err_gpu <= err_cpu * 1.5  # GPU MSE within 50% of CPU
 
     # For TruncatedSVD: verify subspace quality via reconstruction error
     if EstimatorCls is TruncatedSVD:

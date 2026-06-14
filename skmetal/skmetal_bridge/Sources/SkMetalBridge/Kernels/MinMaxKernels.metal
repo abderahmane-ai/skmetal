@@ -44,20 +44,36 @@ kernel void column_minmax(
         }
     }
 
-    threadgroup float tg_mins[2048];
-    threadgroup float tg_maxs[2048];
-
+    // Level 1: SIMD group reduction for each column (zero barriers)
     for (uint b = 0; b < active_cols; b++) {
-        tg_mins[b * lsz + lid] = local_min[b];
-        tg_maxs[b * lsz + lid] = local_max[b];
+        local_min[b] = simd_min(local_min[b]);
+        local_max[b] = simd_max(local_max[b]);
+    }
+
+    // Level 2: SIMD group 0 writes per-column results to threadgroup
+    uint lane_id = lid & 31;
+    uint num_simd_groups = (lsz + 31) / 32;
+    threadgroup float tg_mins[64];  // max 8 cols * 8 SIMD groups
+    threadgroup float tg_maxs[64];
+
+    if (lane_id == 0) {
+        uint sg_idx = lid >> 5;
+        if (sg_idx < num_simd_groups) {
+            for (uint b = 0; b < active_cols; b++) {
+                tg_mins[b * num_simd_groups + sg_idx] = local_min[b];
+                tg_maxs[b * num_simd_groups + sg_idx] = local_max[b];
+            }
+        }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (uint stride = lsz / 2; stride > 0; stride >>= 1) {
+    // Tree reduce per column across SIMD groups
+    for (uint stride = num_simd_groups / 2; stride > 0; stride >>= 1) {
         if (lid < stride) {
             for (uint b = 0; b < active_cols; b++) {
-                uint idx_a = b * lsz + lid;
-                uint idx_b = idx_a + stride;
+                uint base = b * num_simd_groups;
+                uint idx_a = base + lid;
+                uint idx_b = base + lid + stride;
                 tg_mins[idx_a] = min(tg_mins[idx_a], tg_mins[idx_b]);
                 tg_maxs[idx_a] = max(tg_maxs[idx_a], tg_maxs[idx_b]);
             }
@@ -67,8 +83,8 @@ kernel void column_minmax(
 
     if (lid == 0) {
         for (uint b = 0; b < active_cols; b++) {
-            min_out[col_start + b] = tg_mins[b * lsz];
-            max_out[col_start + b] = tg_maxs[b * lsz];
+            min_out[col_start + b] = tg_mins[b * num_simd_groups];
+            max_out[col_start + b] = tg_maxs[b * num_simd_groups];
         }
     }
 }

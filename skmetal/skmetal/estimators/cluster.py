@@ -5,6 +5,8 @@ from .._bridge import (
     gemm,
     pairwise_distance,
     kmeans_assign,
+    kmeans_inertia,
+    kmeans_shift,
     compute_mindists,
     kmeans_batch_fused,
     sv_init, sv_hook, sv_shortcut,
@@ -34,7 +36,7 @@ class MetalKMeans(BaseGPUEstimator):
         num_groups = max(1, (n + 255) // 256)
 
         for _init_attempt in range(n_init):
-            centroids = self._kmeans_plusplus_init(X, k, rng)
+            centroids = self._kmeans_parallel_init(X, k, rng)
             centroids = np.ascontiguousarray(centroids, dtype=np.float32)
             assignments = np.empty(n, dtype=np.uint32)
 
@@ -47,8 +49,7 @@ class MetalKMeans(BaseGPUEstimator):
                 centroids, assignments = self._kmeans_cpu_fallback(X, k, max_iter, tol, rng)
                 actual_iters = max_iter
 
-            diff = X - centroids[assignments]
-            inertia = float(np.sum(diff * diff))
+            inertia = kmeans_inertia(X, centroids, assignments, n, d, k)
             if inertia < best_inertia:
                 best_inertia = inertia
                 best_centroids = centroids.copy()
@@ -64,7 +65,6 @@ class MetalKMeans(BaseGPUEstimator):
 
     def _run_kmeans_batched(self, X, centroids, assignments,
                               n, d, k, num_groups, max_iter, tol):
-        # Check convergence at most 3 times; batch reduces GPU round trips
         batch_size = max(1, (max_iter + 2) // 3)
         total_iters = 0
         for batch_start in range(0, max_iter, batch_size):
@@ -73,27 +73,58 @@ class MetalKMeans(BaseGPUEstimator):
             kmeans_batch_fused(X, centroids, assignments,
                                n, d, k, num_groups, remaining)
             total_iters += remaining
-            shift = np.sqrt(np.square(centroids - old).sum(axis=1)).max()
+            shift = kmeans_shift(centroids, old, k, d)
             if shift < tol:
                 break
         return total_iters
 
-    def _kmeans_plusplus_init(self, X, k, rng):
+    def _kmeans_parallel_init(self, X, k, rng):
+        """k-means|| (parallel) initialization — O(log k) rounds vs k serial rounds.
+
+        Each round samples O(k) candidates proportional to distance² using GPU
+        distance computation. Final set of ~k·log(k) candidates is pruned to k
+        via a single weighted k-means iteration on CPU.
+        """
         n, d = X.shape
         centroids = np.empty((k, d), dtype=np.float32)
         centroids[0] = X[rng.randint(n)]
+
         assignments = np.empty(n, dtype=np.uint32)
         dists = np.empty(n, dtype=np.float32)
-        c_view = np.empty((k, d), dtype=np.float32)
 
-        for i in range(1, k):
-            c_view[:i] = centroids[:i]
-            kmeans_assign(X, c_view[:i], assignments, n, d, i)
-            compute_mindists(X, c_view[:i], assignments, dists, n, d, i)
+        n_rounds = max(1, int(2 + np.log(k)))
+        candidates = [centroids[0]]
+        candidate_set = {0}  # track indices already added
+
+        for _ in range(n_rounds):
+            c_arr = np.ascontiguousarray(np.array(candidates, dtype=np.float32))
+            ck = c_arr.shape[0]
+
+            kmeans_assign(X, c_arr, assignments, n, d, ck)
+            compute_mindists(X, c_arr, assignments, dists, n, d, ck)
             dists = np.maximum(dists, 1e-30)
             probs = dists / dists.sum()
-            centroids[i] = X[rng.choice(n, p=probs)]
-        return centroids
+
+            n_sample = min(k, n)
+            idx = rng.choice(n, size=n_sample, p=probs, replace=False)
+            for i in idx:
+                if i not in candidate_set:
+                    candidate_set.add(i)
+                    candidates.append(X[i])
+
+        # Prune candidates to k via weighted k-means (1 iteration on CPU)
+        all_cand = np.array(candidates, dtype=np.float32)
+        if all_cand.shape[0] <= k:
+            centroids[:all_cand.shape[0]] = all_cand
+            for i in range(all_cand.shape[0], k):
+                centroids[i] = candidates[i % len(candidates)]
+            return centroids
+
+        from sklearn.cluster import KMeans as SklearnKMeans
+        km = SklearnKMeans(n_clusters=k, init=all_cand[:k], n_init=1,
+                          max_iter=1, random_state=rng)
+        km.fit(all_cand)
+        return km.cluster_centers_.astype(np.float32)
 
     def predict(self, X):
         X = self._validate_data(X)[0]
@@ -104,11 +135,6 @@ class MetalKMeans(BaseGPUEstimator):
         assignments = np.empty(n, dtype=np.uint32)
         kmeans_assign(X, self._estimator.cluster_centers_, assignments, n, d, k)
         return assignments.astype(np.int32)
-
-    def _ensure_centroids_contiguous(self, centroids):
-        if not centroids.flags['C_CONTIGUOUS']:
-            return np.ascontiguousarray(centroids)
-        return centroids
 
     def _kmeans_cpu_fallback(self, X, k, max_iter, tol, rng):
         from sklearn.cluster import KMeans as SklearnKMeans

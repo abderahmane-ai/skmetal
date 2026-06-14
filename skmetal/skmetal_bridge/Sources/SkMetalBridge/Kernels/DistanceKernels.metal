@@ -12,8 +12,16 @@ kernel void row_norm_sq(
 ) {
     if (tid >= n) return;
     float sum = 0.0f;
-    for (uint j = 0; j < d; ++j) {
-        float x = X[tid * d + j];
+    uint base = tid * d;
+    uint j = 0;
+    if (d >= 4) {
+        for (; j + 4 <= d; j += 4) {
+            float4 v = *reinterpret_cast<device const float4*>(X + base + j);
+            sum += v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w;
+        }
+    }
+    for (; j < d; ++j) {
+        float x = X[base + j];
         sum += x * x;
     }
     norms[tid] = sum;
@@ -33,8 +41,19 @@ kernel void compute_mindists(
     if (tid >= n) return;
     uint c = assignments[tid];
     float dist = 0.0f;
-    for (uint j = 0; j < d; ++j) {
-        float diff = X[tid * d + j] - centroids[c * d + j];
+    uint base_x = tid * d;
+    uint base_c = c * d;
+    uint j = 0;
+    if (d >= 4) {
+        for (; j + 4 <= d; j += 4) {
+            float4 vx = *reinterpret_cast<device const float4*>(X + base_x + j);
+            float4 vc = *reinterpret_cast<device const float4*>(centroids + base_c + j);
+            float4 diff = vx - vc;
+            dist += diff.x * diff.x + diff.y * diff.y + diff.z * diff.z + diff.w * diff.w;
+        }
+    }
+    for (; j < d; ++j) {
+        float diff = X[base_x + j] - centroids[base_c + j];
         dist += diff * diff;
     }
     dists[tid] = dist;

@@ -10,8 +10,8 @@ kernel void gemm_simple(
     constant uint& M [[buffer(3)]],
     constant uint& N [[buffer(4)]],
     constant uint& K [[buffer(5)]],
-    constant bool& transA [[buffer(6)]],
-    constant bool& transB [[buffer(7)]],
+    constant int& transA [[buffer(6)]],
+    constant int& transB [[buffer(7)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     uint row = gid.y;
