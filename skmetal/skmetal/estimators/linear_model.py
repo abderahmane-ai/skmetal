@@ -204,10 +204,9 @@ class MetalLogisticRegression(BaseGPUEstimator):
         return w_final, b_final
 
     def _fit_multinomial(self, X, y, classes, n, p, n_classes, tol, max_iter, fit_intercept, penalty):
-        y_enc = np.zeros(n, dtype=np.float32)
-        class_to_idx = {c: i for i, c in enumerate(classes)}
-        for i in range(n):
-            y_enc[i] = class_to_idx[y[i]]
+        # One-shot label encoding via np.unique (pure C, much faster than Python loop for large n)
+        _, y_enc = np.unique(y, return_inverse=True)
+        y_enc = y_enc.astype(np.float32)
 
         if fit_intercept:
             ones = np.ones((n, 1), dtype=np.float32)
