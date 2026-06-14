@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, ridge_fit, logreg_irls_fused, logreg_irls_fused_solve, multinomial_irls_iter, multinomial_irls_fused_solve, fista_fit
+from .._bridge import gemm, ridge_fit, logreg_irls_fit, multinomial_irls_fit, fista_fit
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -183,60 +183,27 @@ class MetalLogisticRegression(BaseGPUEstimator):
         return self
 
     def _fit_binary(self, X, y, C, tol, max_iter, fit_intercept, penalty, pos_label):
-        n, p = X.shape
-        alpha = 1.0 / C if penalty == "l2" else 0.0
+        n = X.shape[0]
 
         if fit_intercept:
             ones = np.ones(n, dtype=np.float32)
             Xe = np.column_stack([X, ones])
-            pe = p + 1
         else:
             Xe = X
-            pe = p
 
-        # y already float32 from _validate_data (GPU reads as float32)
-        w = np.zeros(pe, dtype=np.float32)
-
-        # Pre-allocate temp buffers (reused across iterations)
-        linear = np.empty(n, dtype=np.float32)
-        weight = np.empty(n, dtype=np.float32)
-        X_scaled = np.empty((n, pe), dtype=np.float32)
-        Hessian = np.empty((pe, pe), dtype=np.float32)
-        gradient = np.empty(pe, dtype=np.float32)
-        delta = np.empty(pe, dtype=np.float32)
-
-        for it in range(max_iter):
-            if pe >= 500:
-                # Full GPU solve: includes L2 regularization, Cholesky factorization and triangular solve
-                logreg_irls_fused_solve(
-                    Xe, y, w, 0.0, linear, weight, X_scaled, Hessian, gradient, delta, float(alpha)
-                )
-            else:
-                # Fused GPU calculations, followed by CPU solver (faster for small matrices)
-                logreg_irls_fused(Xe, y, w, 0.0, linear, weight, X_scaled, Hessian, gradient)
-                if alpha > 0:
-                    Hessian[np.diag_indices_from(Hessian)] += alpha
-                    gradient += alpha * w
-                delta = np.linalg.solve(Hessian, gradient)
-
-            grad_norm = np.linalg.norm(gradient)
-            if grad_norm < tol * max(1.0, np.linalg.norm(w)):
-                break
-
-            w -= delta
+        # Full IRLS loop in Swift — single bridge call
+        coef, n_iter = logreg_irls_fit(Xe, y, C, tol, max_iter, fit_intercept)
 
         if fit_intercept:
-            w_final = w[:-1].copy()
-            b_final = float(w[-1])
+            w_final = coef[:-1].copy()
+            b_final = float(coef[-1])
         else:
-            w_final = w.copy()
+            w_final = coef.copy()
             b_final = 0.0
 
         return w_final, b_final
 
-    def _fit_multinomial(self, X, y, classes, n, p, C, tol, max_iter, fit_intercept, penalty):
-        alpha = 1.0 / C if penalty == "l2" else 0.0
-
+    def _fit_multinomial(self, X, y, classes, n, p, n_classes, tol, max_iter, fit_intercept, penalty):
         y_enc = np.zeros(n, dtype=np.float32)
         class_to_idx = {c: i for i, c in enumerate(classes)}
         for i in range(n):
@@ -245,39 +212,19 @@ class MetalLogisticRegression(BaseGPUEstimator):
         if fit_intercept:
             ones = np.ones((n, 1), dtype=np.float32)
             Xe = np.column_stack([X, ones])
-            pe = p + 1
         else:
             Xe = X
-            pe = p
 
-        W = np.zeros((pe, C), dtype=np.float32)
-        delta_W = np.empty_like(W)
-        scores = np.empty((n, C), dtype=np.float32)
-        prob = np.empty_like(scores)
-        max_vals = np.empty(n, dtype=np.float32)
-        sum_exp = np.empty(n, dtype=np.float32)
-        residual = np.empty_like(scores)
-        gradient = np.empty((pe, C), dtype=np.float32)
-        hessians = np.empty((C, pe, pe), dtype=np.float32)
-
-        for it in range(max_iter):
-            alpha_scaled = alpha / n if alpha > 0 else 0.0
-            multinomial_irls_fused_solve(
-                Xe, W, y_enc, scores, prob, max_vals, sum_exp, residual, gradient, hessians, delta_W, alpha_scaled
-            )
-
-            grad_norm = np.linalg.norm(gradient)
-            if grad_norm < tol * max(1.0, np.linalg.norm(W)):
-                break
-
-            W -= delta_W
+        # Full multinomial IRLS loop in Swift — single bridge call
+        reg_C = self._estimator.C
+        W, n_iter = multinomial_irls_fit(Xe, y_enc, reg_C, tol, max_iter, n_classes)
 
         if fit_intercept:
             self._estimator.coef_ = W[:-1].T.copy()
             self._estimator.intercept_ = W[-1].copy()
         else:
             self._estimator.coef_ = W.T.copy()
-            self._estimator.intercept_ = np.zeros(C, dtype=np.float32)
+            self._estimator.intercept_ = np.zeros(n_classes, dtype=np.float32)
 
         self._estimator.classes_ = classes
 

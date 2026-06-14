@@ -125,10 +125,14 @@ _BRIDGE_REGISTRY = [
     ("skmetal_negate", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
     ("skmetal_multinomial_irls_iter", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_multinomial_irls_fused_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_rbf_kernel_square", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_rbf_kernel_cross", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_rbf_kernel_square", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_rbf_kernel_cross", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_tree_predict", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_tree_predict_all", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_svc_predict_binary", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float),
+    ("skmetal_gemm_f16", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.c_float, ctypes.c_int, ctypes.c_int),
+    ("skmetal_logreg_irls_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
+    ("skmetal_multinomial_irls_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
 ]
 
 if METAL_AVAILABLE:
@@ -528,18 +532,80 @@ def multinomial_irls_fused_solve(X: np.ndarray, W: np.ndarray, y: np.ndarray,
                  X.shape[0], X.shape[1], int(W.shape[1]))
 
 
-def rbf_kernel_square(X: np.ndarray, X_norm: np.ndarray,
-                       K_out: np.ndarray, gamma: float) -> None:
-    """Compute RBF kernel matrix: K[i][j] = exp(-gamma * ||X[i] - X[j]||^2)."""
+def rbf_kernel_square(X: np.ndarray, K_out: np.ndarray, gamma: float) -> None:
+    """Compute RBF kernel matrix: K[i][j] = exp(-gamma * ||X[i] - X[j]||^2).
+    Row norms are computed internally on GPU.
+    """
     _bridge_call(_lib.skmetal_rbf_kernel_square,
-                 X, X_norm, K_out, gamma,
+                 X, K_out, gamma,
                  X.shape[0], X.shape[1])
 
 
-def rbf_kernel_cross(X1: np.ndarray, X1_norm: np.ndarray,
-                      X2: np.ndarray, X2_norm: np.ndarray,
+def rbf_kernel_cross(X1: np.ndarray, X2: np.ndarray,
                       K_out: np.ndarray, gamma: float) -> None:
-    """Cross RBF kernel: K[i][j] = exp(-gamma * ||X1[i] - X2[j]||^2)."""
+    """Cross RBF kernel: K[i][j] = exp(-gamma * ||X1[i] - X2[j]||^2).
+    Row norms for both matrices computed internally on GPU.
+    """
     _bridge_call(_lib.skmetal_rbf_kernel_cross,
-                 X1, X1_norm, X2, X2_norm, K_out, gamma,
+                 X1, X2, K_out, gamma,
                  X1.shape[0], X2.shape[0], X1.shape[1])
+
+
+def svc_predict_binary(X_test: np.ndarray, X_sv: np.ndarray,
+                        dual_coef: np.ndarray, intercept: np.ndarray,
+                        decisions: np.ndarray, gamma: float) -> None:
+    """Matrix-free SVC binary predict: decision[i] = Σ_k dc[k] * exp(-γ * ||x_i - sv_k||²) + b.
+    Avoids materializing the full n_test × n_SV Gram matrix.
+    """
+    _bridge_call(_lib.skmetal_svc_predict_binary,
+                 X_test, X_sv, dual_coef, intercept, decisions,
+                 X_test.shape[0], X_sv.shape[0], X_test.shape[1], gamma)
+
+
+def gemm_f16(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
+              trans_A=False, trans_B=False) -> np.ndarray:
+    """C = alpha * op(A) @ op(B) + beta * C using float16 GEMM (1.65x throughput).
+    Input/output remain float32; conversion happens internally on GPU.
+    """
+    if A.dtype != np.float32 or B.dtype != np.float32:
+        raise TypeError("A and B must be float32")
+    if not (A.flags["C_CONTIGUOUS"] and B.flags["C_CONTIGUOUS"]):
+        raise ValueError("A and B must be C-contiguous")
+    M, K = (A.shape[1], A.shape[0]) if trans_A else (A.shape[0], A.shape[1])
+    K2, N = (B.shape[1], B.shape[0]) if trans_B else (B.shape[0], B.shape[1])
+    if K != K2:
+        raise ValueError(f"Incompatible dimensions: A {A.shape}, B {B.shape}")
+    C = np.empty((M, N), dtype=np.float32, order="C")
+    _bridge_call(_lib.skmetal_gemm_f16, A, B, C, M, N, K,
+                 ctypes.c_float(alpha), ctypes.c_float(beta),
+                 ctypes.c_int(int(trans_A)), ctypes.c_int(int(trans_B)))
+    return C
+
+
+def logreg_irls_fit(X: np.ndarray, y: np.ndarray, C: float, tol: float,
+                     max_iter: int, fit_intercept: bool) -> tuple[np.ndarray, int]:
+    """Full binary IRLS fit loop in Swift. Returns (coef, n_iter)."""
+    n, p = X.shape
+    pe = p + 1 if fit_intercept else p
+    coef = np.empty(pe, dtype=np.float32, order="C")
+    n_iter_out = ctypes.c_int32(0)
+    _bridge_call(_lib.skmetal_logreg_irls_fit,
+                 X, y, coef, ctypes.c_float(C), ctypes.c_float(tol),
+                 ctypes.c_int32(max_iter), ctypes.c_int32(int(fit_intercept)),
+                 ctypes.c_size_t(n), ctypes.c_size_t(pe),
+                 ctypes.byref(n_iter_out))
+    return coef, n_iter_out.value
+
+
+def multinomial_irls_fit(X: np.ndarray, y_enc: np.ndarray, C: float, tol: float,
+                          max_iter: int, n_classes: int) -> tuple[np.ndarray, int]:
+    """Full multinomial IRLS fit loop in Swift. Returns (W, n_iter)."""
+    n, p = X.shape
+    W = np.empty((p, n_classes), dtype=np.float32, order="C")
+    n_iter_out = ctypes.c_int32(0)
+    _bridge_call(_lib.skmetal_multinomial_irls_fit,
+                 X, y_enc, W, ctypes.c_float(C), ctypes.c_float(tol),
+                 ctypes.c_int32(max_iter),
+                 ctypes.c_size_t(n), ctypes.c_size_t(p), ctypes.c_size_t(n_classes),
+                 ctypes.byref(n_iter_out))
+    return W, n_iter_out.value

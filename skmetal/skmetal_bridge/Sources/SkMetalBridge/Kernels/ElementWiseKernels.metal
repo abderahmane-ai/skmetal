@@ -166,3 +166,81 @@ kernel void negate(
     if (tid >= n) return;
     output[tid] = -a[tid];
 }
+
+// SVC predict: decision[i] = sum_k dual_coef[k] * exp(-gamma * ||X_test[i] - X_sv[k]||^2) + intercept
+// Each thread handles one test point.
+kernel void svc_predict_binary(
+    device const float* X_test [[buffer(0)]],
+    device const float* X_sv [[buffer(1)]],
+    device const float* dual_coef [[buffer(2)]],
+    device const float* intercept [[buffer(3)]],
+    device float* decisions [[buffer(4)]],
+    constant uint& n_test [[buffer(5)]],
+    constant uint& n_sv [[buffer(6)]],
+    constant uint& d [[buffer(7)]],
+    constant float& gamma [[buffer(8)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n_test) return;
+    float s = 0.0;
+    for (uint k = 0; k < n_sv; k++) {
+        float d2 = 0.0;
+        for (uint l = 0; l < d; l++) {
+            float diff = X_test[tid * d + l] - X_sv[k * d + l];
+            d2 += diff * diff;
+        }
+        s += dual_coef[k] * exp(-gamma * d2);
+    }
+    decisions[tid] = s + intercept[0];
+}
+
+// Convert float32 buffer to float16
+kernel void convert_f32_to_f16(
+    device const float* input [[buffer(0)]],
+    device half* output [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    output[tid] = half(input[tid]);
+}
+
+// Convert float16 buffer back to float32
+kernel void convert_f16_to_f32(
+    device const half* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    output[tid] = float(input[tid]);
+}
+
+// Fill a buffer with a constant float value
+kernel void fill_f32(
+    device float* buf [[buffer(0)]],
+    constant float& val [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    buf[tid] = val;
+}
+
+// Residual after softmax: residual[i][j] = prob[i][j] - (j == y[i] ? 1 : 0)
+// prob is already normalized (MPSMatrixSoftMax output).
+kernel void softmax_residual(
+    device const float* prob [[buffer(0)]],
+    device const float* y [[buffer(1)]],
+    device float* residual [[buffer(2)]],
+    constant uint& n [[buffer(3)]],
+    constant uint& n_cols [[buffer(4)]],
+    uint2 tid [[thread_position_in_grid]]
+) {
+    uint row = tid.x, col = tid.y;
+    if (row >= n || col >= n_cols) return;
+    uint idx = row * n_cols + col;
+    uint true_class = uint(y[row]);
+    float target = (col == true_class) ? 1.0f : 0.0f;
+    residual[idx] = prob[idx] - target;
+}

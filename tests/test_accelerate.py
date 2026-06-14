@@ -2,7 +2,6 @@
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 import skmetal
 from skmetal._dispatch import _is_supported, _wrap_estimator
