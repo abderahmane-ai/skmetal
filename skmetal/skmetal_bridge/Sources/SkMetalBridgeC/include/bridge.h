@@ -49,16 +49,12 @@ int skmetal_center_columns(void* X, const void* mean, size_t n, size_t d);
 /* NOTE: X buffer is mean-centered in-place as a side effect. */
 int skmetal_ridge_fit(void* X, const void* y, void* XTX, void* XTy, void* X_mean_out, size_t n, size_t p);
 
-int skmetal_logreg_irls_iter(const void* X, const void* y, const void* w, float b, void* linear, void* weight, void* X_scaled, void* Hessian, void* gradient, size_t n, size_t p);
-
 int skmetal_knn_k_select(const void* D, void* out_indices, void* out_values, size_t N, size_t M, size_t k);
 int skmetal_knn_vote_classify(const void* indices, const void* train_labels, void* predictions, size_t N, size_t k);
 int skmetal_knn_vote_regress(const void* indices, const void* train_targets, void* predictions, size_t N, size_t k);
 
 int skmetal_soft_threshold(void* w, const void* w_temp, float threshold, size_t n);
 int skmetal_column_transform(const void* input, void* output, const void* center, const void* scale, size_t n, size_t d);
-
-int skmetal_multinomial_irls_iter(const void* X, const void* W, const void* y, void* scores, void* prob, void* max_vals, void* sum_exp, void* residual, void* gradient, void* hessians, size_t n, size_t p, size_t C);
 
 int skmetal_warmup(void);
 

@@ -193,6 +193,7 @@ class MetalLogisticRegression(BaseGPUEstimator):
 
         # Full IRLS loop in Swift — single bridge call
         coef, n_iter = logreg_irls_fit(Xe, y, C, tol, max_iter, fit_intercept)
+        self._estimator.n_iter_ = [n_iter]
 
         if fit_intercept:
             w_final = coef[:-1].copy()
@@ -217,6 +218,7 @@ class MetalLogisticRegression(BaseGPUEstimator):
         # Full multinomial IRLS loop in Swift — single bridge call
         reg_C = self._estimator.C
         W, n_iter = multinomial_irls_fit(Xe, y_enc, reg_C, tol, max_iter, n_classes)
+        self._estimator.n_iter_ = [n_iter]
 
         if fit_intercept:
             self._estimator.coef_ = W[:-1].T.copy()

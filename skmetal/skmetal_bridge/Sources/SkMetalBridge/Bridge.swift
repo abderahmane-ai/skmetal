@@ -93,7 +93,7 @@ public func skmetal_warmup() -> Int32 {
         ("compute_linear_irls", "compute_linear_irls"),
         ("compute_error_scale", "compute_error_scale"),
         ("l2_reg_irls", "l2_reg_irls"),
-        ("multinomial_l2_reg", "multinomial_l2_reg"),
+        ("multinomial_grad_l2", "multinomial_grad_l2"),
         ("rbf_apply", "rbf_apply"),
         ("fill_f32", "fill_f32"),
         ("softmax_residual", "softmax_residual"),
