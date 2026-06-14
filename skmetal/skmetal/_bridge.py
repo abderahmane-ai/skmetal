@@ -124,6 +124,9 @@ _BRIDGE_REGISTRY = [
     ("skmetal_softmax_normalize_residual", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_negate", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
     ("skmetal_multinomial_irls_iter", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_multinomial_irls_fused_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_rbf_kernel_square", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_rbf_kernel_cross", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_tree_predict", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_tree_predict_all", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
 ]
@@ -510,3 +513,33 @@ def multinomial_irls_iter(X: np.ndarray, W: np.ndarray, y: np.ndarray,
     _bridge_call(_lib.skmetal_multinomial_irls_iter,
                  X, W, y, scores, prob, max_vals, sum_exp, residual, gradient, hessians,
                  X.shape[0], X.shape[1], W.shape[1])
+
+
+def multinomial_irls_fused_solve(X: np.ndarray, W: np.ndarray, y: np.ndarray,
+                                  scores: np.ndarray, prob: np.ndarray,
+                                  max_vals: np.ndarray, sum_exp: np.ndarray,
+                                  residual: np.ndarray, gradient: np.ndarray,
+                                  hessians: np.ndarray, delta_W: np.ndarray,
+                                  alpha: float) -> None:
+    """Fused multinomial IRLS iteration + L2 + batched Cholesky solve."""
+    _bridge_call(_lib.skmetal_multinomial_irls_fused_solve,
+                 X, W, y, scores, prob, max_vals, sum_exp, residual, gradient,
+                 hessians, delta_W, alpha,
+                 X.shape[0], X.shape[1], int(W.shape[1]))
+
+
+def rbf_kernel_square(X: np.ndarray, X_norm: np.ndarray,
+                       K_out: np.ndarray, gamma: float) -> None:
+    """Compute RBF kernel matrix: K[i][j] = exp(-gamma * ||X[i] - X[j]||^2)."""
+    _bridge_call(_lib.skmetal_rbf_kernel_square,
+                 X, X_norm, K_out, gamma,
+                 X.shape[0], X.shape[1])
+
+
+def rbf_kernel_cross(X1: np.ndarray, X1_norm: np.ndarray,
+                      X2: np.ndarray, X2_norm: np.ndarray,
+                      K_out: np.ndarray, gamma: float) -> None:
+    """Cross RBF kernel: K[i][j] = exp(-gamma * ||X1[i] - X2[j]||^2)."""
+    _bridge_call(_lib.skmetal_rbf_kernel_cross,
+                 X1, X1_norm, X2, X2_norm, K_out, gamma,
+                 X1.shape[0], X2.shape[0], X1.shape[1])

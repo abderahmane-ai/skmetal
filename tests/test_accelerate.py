@@ -13,8 +13,8 @@ class TestIsSupported:
         assert _is_supported(LinearRegression()) is True
 
     def test_unsupported_estimator(self):
-        svc = SVC()
-        assert _is_supported(svc) is False
+        rf = RandomForestClassifier()
+        assert _is_supported(rf) is False
 
     def test_custom_class_looks_like_sklearn(self):
         class FakeEstimator:
@@ -31,9 +31,9 @@ class TestWrapEstimator:
         assert wrapped._estimator is lr
 
     def test_wrap_unsupported_returns_original(self):
-        svc = SVC()
-        wrapped = _wrap_estimator(svc)
-        assert wrapped is svc
+        rf = RandomForestClassifier()
+        wrapped = _wrap_estimator(rf)
+        assert wrapped is rf
         assert not hasattr(wrapped, "_estimator")
 
     def test_wrap_already_wrapped_is_idempotent(self):
@@ -64,21 +64,21 @@ class TestAccelerateDecorator:
         assert hasattr(pipe.steps[1][1], "_estimator")
 
     def test_accelerate_unsupported_returns_original(self):
-        svc = skmetal.accelerate(SVC())
-        assert not hasattr(svc, "_estimator")
+        rf = skmetal.accelerate(RandomForestClassifier())
+        assert not hasattr(rf, "_estimator")
 
     def test_accelerate_pipeline_with_unsupported(self):
         pipe = skmetal.accelerate(Pipeline([
             ("scaler", StandardScaler()),
-            ("svm", SVC()),
+            ("rf", RandomForestClassifier()),
         ]))
         assert hasattr(pipe.steps[0][1], "_estimator")  # StandardScaler wrapped
-        assert not hasattr(pipe.steps[1][1], "_estimator")  # SVC untouched
+        assert not hasattr(pipe.steps[1][1], "_estimator")  # RF untouched
 
     def test_accelerate_pipeline_all_unsupported(self):
         pipe = skmetal.accelerate(Pipeline([
-            ("svm", SVC()),
-            ("rf", RandomForestClassifier()),
+            ("rf1", RandomForestClassifier()),
+            ("rf2", RandomForestClassifier()),
         ]))
         # Neither step should be wrapped
         assert not hasattr(pipe.steps[0][1], "_estimator")

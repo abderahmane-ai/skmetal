@@ -142,6 +142,20 @@ kernel void softmax_normalize_residual(
     residual[idx] = p - target;
 }
 
+// RBF kernel: D[i][j] = exp(-gamma * D[i][j])
+// D already contains squared distances. In-place.
+kernel void rbf_apply(
+    device float* D [[buffer(0)]],
+    constant float& gamma [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    constant uint& m [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= m || gid.y >= n) return;
+    uint idx = gid.y * m + gid.x;
+    D[idx] = exp(-gamma * D[idx]);
+}
+
 // Element-wise: output[i] = -a[i]
 kernel void negate(
     device const float* a [[buffer(0)]],

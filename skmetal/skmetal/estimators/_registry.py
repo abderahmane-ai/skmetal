@@ -11,6 +11,7 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor, NearestNeighbors
 from sklearn.ensemble import HistGradientBoostingRegressor, HistGradientBoostingClassifier
+from sklearn.svm import SVC, SVR
 
 # Maps sklearn class → (python_module, gpu_class_name).
 # This is the ONLY place where this mapping lives. _dispatch.py consumes it directly.
@@ -36,6 +37,9 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
 
     HistGradientBoostingRegressor:   ("skmetal.estimators.ensemble",     "MetalHistGradientBoostingRegressor"),
     HistGradientBoostingClassifier:  ("skmetal.estimators.ensemble",     "MetalHistGradientBoostingClassifier"),
+
+    SVC:                             ("skmetal.estimators.svm",          "MetalSVC"),
+    SVR:                             ("skmetal.estimators.svm",          "MetalSVR"),
 }
 
 # Legacy aliases kept for any external code that imported GPU_ESTIMATORS or

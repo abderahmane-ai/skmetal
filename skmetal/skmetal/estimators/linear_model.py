@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, ridge_fit, logreg_irls_fused, logreg_irls_fused_solve, multinomial_irls_iter, fista_fit
+from .._bridge import gemm, ridge_fit, logreg_irls_fused, logreg_irls_fused_solve, multinomial_irls_iter, multinomial_irls_fused_solve, fista_fit
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -251,6 +251,7 @@ class MetalLogisticRegression(BaseGPUEstimator):
             pe = p
 
         W = np.zeros((pe, C), dtype=np.float32)
+        delta_W = np.empty_like(W)
         scores = np.empty((n, C), dtype=np.float32)
         prob = np.empty_like(scores)
         max_vals = np.empty(n, dtype=np.float32)
@@ -260,23 +261,16 @@ class MetalLogisticRegression(BaseGPUEstimator):
         hessians = np.empty((C, pe, pe), dtype=np.float32)
 
         for it in range(max_iter):
-            multinomial_irls_iter(Xe, W, y_enc, scores, prob, max_vals, sum_exp, residual, gradient, hessians)
-
-            if alpha > 0:
-                alpha_scaled = alpha / n
-                for c in range(C):
-                    hessians[c, range(pe), range(pe)] += alpha_scaled
-                    gradient[:, c] += alpha_scaled * W[:, c]
+            alpha_scaled = alpha / n if alpha > 0 else 0.0
+            multinomial_irls_fused_solve(
+                Xe, W, y_enc, scores, prob, max_vals, sum_exp, residual, gradient, hessians, delta_W, alpha_scaled
+            )
 
             grad_norm = np.linalg.norm(gradient)
             if grad_norm < tol * max(1.0, np.linalg.norm(W)):
                 break
 
-            for c in range(C):
-                H = hessians[c]
-                G_c = gradient[:, c].copy()
-                delta = np.linalg.solve(H, G_c)
-                W[:, c] -= delta
+            W -= delta_W
 
         if fit_intercept:
             self._estimator.coef_ = W[:-1].T.copy()

@@ -113,3 +113,25 @@ kernel void multinomial_hessians(
     }
     hessians[c * p * p + f * p + g] = h;
 }
+
+// L2 regularization for multinomial (applied inline on GPU):
+//   Hessian[c][i][i] += alpha
+//   gradient[c][i] += alpha * W[i][c]
+// gradient is stored as (C, p) — contiguous per-class
+// W is stored as (p, C) — column-major per-class
+kernel void multinomial_l2_reg(
+    device float* hessians [[buffer(0)]],
+    device float* gradient [[buffer(1)]],
+    device const float* W [[buffer(2)]],
+    constant float& alpha [[buffer(3)]],
+    constant uint& p [[buffer(4)]],
+    constant uint& C [[buffer(5)]],
+    uint2 tid [[thread_position_in_grid]]
+) {
+    uint c = tid.x, i = tid.y;
+    if (c >= C || i >= p) return;
+    uint h_idx = c * p * p + i * p + i;
+    hessians[h_idx] += alpha;
+    uint g_idx = c * p + i;
+    gradient[g_idx] += alpha * W[i * C + c];
+}
