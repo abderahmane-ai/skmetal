@@ -1,8 +1,12 @@
 #include <metal_stdlib>
 using namespace metal;
 
+constant uint BLOCK_COLS = 8;
+
 // Compute mean of each column of X (tall-skinny, n >> p).
-// One threadgroup per column, tree-reduction within threadgroup.
+// Tiled column approach: each threadgroup processes BLOCK_COLS columns,
+// reading BLOCK_COLS contiguous elements per row (coalesced).
+// Dispatch: ceil(p / BLOCK_COLS) threadgroups, each with 256 threads.
 kernel void column_means(
     device const float* X [[buffer(0)]],
     device float* means [[buffer(1)]],
@@ -12,37 +16,51 @@ kernel void column_means(
     uint lsz [[threads_per_threadgroup]],
     uint gid [[threadgroup_position_in_grid]]
 ) {
-    if (gid >= p) return;
-    uint col = gid;
+    uint col_start = gid * BLOCK_COLS;
+    if (col_start >= p) return;
+    uint col_end = min(col_start + BLOCK_COLS, p);
+    uint active_cols = col_end - col_start;
 
-    threadgroup float shared[256];
-    float sum = 0.0f;
+    float local_sum[8];
+    for (uint b = 0; b < active_cols; b++) {
+        local_sum[b] = 0.0f;
+    }
 
-    uint rows_per_thread = (n + lsz - 1) / lsz;
-    for (uint i = 0; i < rows_per_thread; ++i) {
-        uint row = lid + i * lsz;
-        if (row < n) {
-            sum += X[row * p + col];
+    // Coalesced read: each thread reads BLOCK_COLS contiguous floats per row
+    uint total_threads = lsz;
+    for (uint i = lid; i < n; i += total_threads) {
+        uint base = i * p + col_start;
+        for (uint b = 0; b < active_cols; b++) {
+            local_sum[b] += X[base + b];
         }
     }
 
-    shared[lid] = sum;
+    threadgroup float tg_shared[2048];
+
+    for (uint b = 0; b < active_cols; b++) {
+        tg_shared[b * lsz + lid] = local_sum[b];
+    }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     for (uint stride = lsz >> 1; stride > 0; stride >>= 1) {
         if (lid < stride) {
-            shared[lid] += shared[lid + stride];
+            for (uint b = 0; b < active_cols; b++) {
+                tg_shared[b * lsz + lid] += tg_shared[b * lsz + lid + stride];
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
     if (lid == 0) {
-        means[col] = shared[0] / (float)n;
+        for (uint b = 0; b < active_cols; b++) {
+            means[col_start + b] = tg_shared[b * lsz] / (float)n;
+        }
     }
 }
 
 // Subtract column means from each element in-place:
 // X[i][j] -= mean[j] for all i, j
+// Uses dispatchThreads for automatic coalesced access.
 kernel void center_columns(
     device float* X [[buffer(0)]],
     device const float* means [[buffer(1)]],

@@ -57,6 +57,7 @@ kernel void kmeans_partial_sum(
 ) {
     threadgroup float sums[7168];
     threadgroup uint counts[256];
+    uint stride = d + 1;
     uint area = batch_k * d;
 
     for (uint i = lid; i < area; i += lsz) sums[i] = 0.0f;
@@ -78,7 +79,7 @@ kernel void kmeans_partial_sum(
         for (uint j = 0; j < d; ++j) {
             float x = X[i * d + j];
             threadgroup atomic_int* addr =
-                (threadgroup atomic_int*)&sums[local_c * d + j];
+                (threadgroup atomic_int*)&sums[local_c * stride + j];
             int expected = atomic_load_explicit(addr, memory_order_relaxed);
             int desired;
             do {
@@ -175,6 +176,7 @@ kernel void kmeans_assign_partial(
     for (uint i = lid; i < kd; i += lsz) partial_centroids[pc_off + i] = 0.0f;
     if (lid < k) partial_counts[pn_off + lid] = 0;
 
+    uint stride = d + 1;
     threadgroup float accum[7168];
     threadgroup uint accum_counts[256];
     for (uint i = lid; i < kd; i += lsz) accum[i] = 0.0f;
@@ -200,7 +202,7 @@ kernel void kmeans_assign_partial(
         for (uint j = 0; j < d; ++j) {
             float x = X[i * d + j];
             threadgroup atomic_int* a =
-                (threadgroup atomic_int*)&accum[best_c * d + j];
+                (threadgroup atomic_int*)&accum[best_c * stride + j];
             int expected = atomic_load_explicit(a, memory_order_relaxed);
             int desired;
             do {

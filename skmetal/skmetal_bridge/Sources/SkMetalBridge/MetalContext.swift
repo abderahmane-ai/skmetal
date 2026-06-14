@@ -19,6 +19,8 @@ final class MetalContext: @unchecked Sendable {
     private let cacheLock = NSLock()
     private var bufferCache: [Int: [MTLBuffer]] = [:]
     private let bufferLock = NSLock()
+    private var mpsGemmCache: [String: MPSMatrixMultiplication] = [:]
+    private let mpsLock = NSLock()
 
     var commandQueue: MTLCommandQueue {
         let tid = Thread.current.hashValue
@@ -80,6 +82,26 @@ final class MetalContext: @unchecked Sendable {
         }
         bufferCache[key]!.append(buffer)
         bufferLock.unlock()
+    }
+
+    func getMPSGemm(transposeLeft: Bool, transposeRight: Bool,
+                     resultRows: Int, resultColumns: Int, interiorColumns: Int,
+                     alpha: Double, beta: Double) -> MPSMatrixMultiplication {
+        let key = "\(transposeLeft)_\(transposeRight)_\(resultRows)_\(resultColumns)_\(interiorColumns)"
+        mpsLock.lock()
+        defer { mpsLock.unlock() }
+        if let cached = mpsGemmCache[key] { return cached }
+        let gemm = MPSMatrixMultiplication(
+            device: device,
+            transposeLeft: transposeLeft,
+            transposeRight: transposeRight,
+            resultRows: resultRows,
+            resultColumns: resultColumns,
+            interiorColumns: interiorColumns,
+            alpha: alpha,
+            beta: beta)
+        mpsGemmCache[key] = gemm
+        return gemm
     }
 
     func getPipeline(name: String, functionName: String) -> MTLComputePipelineState? {

@@ -18,6 +18,7 @@ DerivedData/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.benchmarks/
 
 # IDE
 .vscode/
@@ -26,6 +27,7 @@ DerivedData/
 *.swo
 *~
 .DS_Store
+.opencode/
 
 # Environment
 .env
@@ -37,6 +39,11 @@ env/
 skmetal/skmetal/MetalSource.swift
 skmetal/skmetal_bridge/Sources/SkMetalBridge/MetalSource.swift
 *.metallib
+graphify-out/
+
+# Agent instructions (not committed, local to each session)
+AGENTS.md
+.agents/
 
 # Removed scaffolding
 skmetal_core/

@@ -1,11 +1,9 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Tile-local top-k selection: one thread per query row, maintains a sorted
-// top-k list in device memory (out_vals/out_idxs). No MAX_K limit — works for
-// any k that fits in device memory. Replaces the old tree-reduce kernel which
-// required k <= 128 due to register/local memory constraints.
-// Dispatch 1 thread per query row (threadgroups = n_q, threads = 1).
+// Tile-local top-k selection for Euclidean distance.
+// Uses batch dispatch: each threadgroup processes multiple query rows.
+// Each thread handles one query row; stride by total_threads for remaining rows.
 kernel void knn_select_tile_topk(
     device const float* raw_dot [[buffer(0)]],
     device const float* r_query [[buffer(1)]],
@@ -15,42 +13,43 @@ kernel void knn_select_tile_topk(
     constant uint& n_q [[buffer(5)]],
     constant uint& n_t [[buffer(6)]],
     constant uint& k [[buffer(7)]],
-    uint gid [[thread_position_in_grid]]
+    uint gid [[threadgroup_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]],
+    uint lsz [[threads_per_threadgroup]],
+    uint tgpg [[threadgroups_per_grid]]
 ) {
-    if (gid >= n_q || k == 0) return;
-    uint row = gid;
+    uint total_threads = lsz * tgpg;
+    for (uint row = gid * lsz + lid; row < n_q; row += total_threads) {
+        device float* my_vals = out_vals + row * k;
+        device int* my_idxs = out_idxs + row * k;
 
-    device float* my_vals = out_vals + row * k;
-    device int* my_idxs = out_idxs + row * k;
-
-    for (uint i = 0; i < k; i++) {
-        my_vals[i] = INFINITY;
-        my_idxs[i] = 0;
-    }
-
-    float r_q = r_query[row];
-    device const float* D_row = raw_dot + row * n_t;
-
-    for (uint j = 0; j < n_t; j++) {
-        float dist = r_q + r_train[j] - 2.0f * D_row[j];
-
-        if (dist >= my_vals[k - 1]) continue;
-
-        uint pos = k - 1;
-        while (pos > 0 && dist < my_vals[pos - 1]) {
-            my_vals[pos] = my_vals[pos - 1];
-            my_idxs[pos] = my_idxs[pos - 1];
-            pos--;
+        for (uint i = 0; i < k; i++) {
+            my_vals[i] = INFINITY;
+            my_idxs[i] = 0;
         }
-        my_vals[pos] = dist;
-        my_idxs[pos] = int(j);
+
+        float r_q = r_query[row];
+        device const float* D_row = raw_dot + row * n_t;
+
+        for (uint j = 0; j < n_t; j++) {
+            float dist = r_q + r_train[j] - 2.0f * D_row[j];
+
+            if (dist >= my_vals[k - 1]) continue;
+
+            uint pos = k - 1;
+            while (pos > 0 && dist < my_vals[pos - 1]) {
+                my_vals[pos] = my_vals[pos - 1];
+                my_idxs[pos] = my_idxs[pos - 1];
+                pos--;
+            }
+            my_vals[pos] = dist;
+            my_idxs[pos] = int(j);
+        }
     }
 }
 
 // Majority-vote classification from k-nearest neighbor labels.
-// Uses bincount semantics (ties broken by smallest label value),
-// matching sklearn's KNeighborsClassifier.predict().
-// Supports up to 256 classes (labels 0..255).
+// Each thread handles one query point (stride-based dispatch).
 kernel void knn_vote_classify(
     device const int* indices [[buffer(0)]],
     device const float* train_labels [[buffer(1)]],
@@ -102,10 +101,8 @@ kernel void knn_vote_regress(
 }
 
 // Two-way merge of tile-local top-k into global top-k.
-// Both lists are sorted ascending by distance.
-// Merges the k smallest distances from both lists into global_vals/global_idxs.
-// Tile-local indices are adjusted to global by adding tile_start.
-// Uses device temp buffers for merge staging (no MAX_K limit).
+// Both lists sorted ascending by distance. Merges k smallest into global.
+// Batch dispatch: each threadgroup processes multiple query rows.
 kernel void knn_merge_topk(
     device const float* tile_vals [[buffer(0)]],
     device const int* tile_idxs [[buffer(1)]],
@@ -116,39 +113,42 @@ kernel void knn_merge_topk(
     constant uint& n_q [[buffer(6)]],
     constant uint& k [[buffer(7)]],
     constant uint& tile_start [[buffer(8)]],
-    uint gid [[thread_position_in_grid]]
+    uint gid [[threadgroup_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]],
+    uint lsz [[threads_per_threadgroup]],
+    uint tgpg [[threadgroups_per_grid]]
 ) {
-    if (gid >= n_q || k == 0) return;
-    uint row = gid;
+    uint total_threads = lsz * tgpg;
+    for (uint row = gid * lsz + lid; row < n_q; row += total_threads) {
+        device const float* a_vals = tile_vals + row * k;
+        device const int* a_idxs = tile_idxs + row * k;
+        device float* b_vals = global_vals + row * k;
+        device int* b_idxs = global_idxs + row * k;
+        device float* m_vals = temp_vals + row * k;
+        device int* m_idxs = temp_idxs + row * k;
 
-    device const float* a_vals = tile_vals + row * k;
-    device const int* a_idxs = tile_idxs + row * k;
-    device float* b_vals = global_vals + row * k;
-    device int* b_idxs = global_idxs + row * k;
-    device float* m_vals = temp_vals + row * k;
-    device int* m_idxs = temp_idxs + row * k;
-
-    uint i_a = 0, i_b = 0;
-    for (uint s = 0; s < k; s++) {
-        if (i_a < k && (i_b >= k || a_vals[i_a] < b_vals[i_b])) {
-            m_vals[s] = a_vals[i_a];
-            m_idxs[s] = a_idxs[i_a] + int(tile_start);
-            i_a++;
-        } else {
-            m_vals[s] = b_vals[i_b];
-            m_idxs[s] = b_idxs[i_b];
-            i_b++;
+        uint i_a = 0, i_b = 0;
+        for (uint s = 0; s < k; s++) {
+            if (i_a < k && (i_b >= k || a_vals[i_a] < b_vals[i_b])) {
+                m_vals[s] = a_vals[i_a];
+                m_idxs[s] = a_idxs[i_a] + int(tile_start);
+                i_a++;
+            } else {
+                m_vals[s] = b_vals[i_b];
+                m_idxs[s] = b_idxs[i_b];
+                i_b++;
+            }
         }
-    }
 
-    for (uint s = 0; s < k; s++) {
-        b_vals[s] = m_vals[s];
-        b_idxs[s] = m_idxs[s];
+        for (uint s = 0; s < k; s++) {
+            b_vals[s] = m_vals[s];
+            b_idxs[s] = m_idxs[s];
+        }
     }
 }
 
 // Manhattan (L1) tile-local top-k: direct L1 distance from X data.
-// No GEMM or norms needed. One thread per query row.
+// No GEMM or norms needed. Batch dispatch per threadgroup.
 kernel void knn_select_tile_topk_manhattan(
     device const float* X_query [[buffer(0)]],
     device const float* X_train [[buffer(1)]],
@@ -158,40 +158,43 @@ kernel void knn_select_tile_topk_manhattan(
     constant uint& n_t [[buffer(5)]],
     constant uint& d [[buffer(6)]],
     constant uint& k [[buffer(7)]],
-    uint gid [[thread_position_in_grid]]
+    uint gid [[threadgroup_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]],
+    uint lsz [[threads_per_threadgroup]],
+    uint tgpg [[threadgroups_per_grid]]
 ) {
-    if (gid >= n_q || k == 0) return;
-    uint row = gid;
+    uint total_threads = lsz * tgpg;
+    for (uint row = gid * lsz + lid; row < n_q; row += total_threads) {
+        device float* my_vals = out_vals + row * k;
+        device int* my_idxs = out_idxs + row * k;
 
-    device float* my_vals = out_vals + row * k;
-    device int* my_idxs = out_idxs + row * k;
-
-    for (uint i = 0; i < k; i++) {
-        my_vals[i] = INFINITY;
-        my_idxs[i] = 0;
-    }
-
-    for (uint j = 0; j < n_t; j++) {
-        float dist = 0.0f;
-        for (uint dim = 0; dim < d; dim++) {
-            dist += fabs(X_query[row * d + dim] - X_train[j * d + dim]);
+        for (uint i = 0; i < k; i++) {
+            my_vals[i] = INFINITY;
+            my_idxs[i] = 0;
         }
 
-        if (dist >= my_vals[k - 1]) continue;
+        for (uint j = 0; j < n_t; j++) {
+            float dist = 0.0f;
+            for (uint dim = 0; dim < d; dim++) {
+                dist += fabs(X_query[row * d + dim] - X_train[j * d + dim]);
+            }
 
-        uint pos = k - 1;
-        while (pos > 0 && dist < my_vals[pos - 1]) {
-            my_vals[pos] = my_vals[pos - 1];
-            my_idxs[pos] = my_idxs[pos - 1];
-            pos--;
+            if (dist >= my_vals[k - 1]) continue;
+
+            uint pos = k - 1;
+            while (pos > 0 && dist < my_vals[pos - 1]) {
+                my_vals[pos] = my_vals[pos - 1];
+                my_idxs[pos] = my_idxs[pos - 1];
+                pos--;
+            }
+            my_vals[pos] = dist;
+            my_idxs[pos] = int(j);
         }
-        my_vals[pos] = dist;
-        my_idxs[pos] = int(j);
     }
 }
 
 // Cosine tile-local top-k: uses MPS dot products + precomputed row norms.
-// distance = 1 - dot / (sqrt(rq) * sqrt(rt)). One thread per query row.
+// distance = 1 - dot / (sqrt(rq) * sqrt(rt)). Batch dispatch per threadgroup.
 kernel void knn_select_tile_topk_cosine(
     device const float* raw_dot [[buffer(0)]],
     device const float* r_query [[buffer(1)]],
@@ -201,36 +204,39 @@ kernel void knn_select_tile_topk_cosine(
     constant uint& n_q [[buffer(5)]],
     constant uint& n_t [[buffer(6)]],
     constant uint& k [[buffer(7)]],
-    uint gid [[thread_position_in_grid]]
+    uint gid [[threadgroup_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]],
+    uint lsz [[threads_per_threadgroup]],
+    uint tgpg [[threadgroups_per_grid]]
 ) {
-    if (gid >= n_q || k == 0) return;
-    uint row = gid;
+    uint total_threads = lsz * tgpg;
+    for (uint row = gid * lsz + lid; row < n_q; row += total_threads) {
+        device float* my_vals = out_vals + row * k;
+        device int* my_idxs = out_idxs + row * k;
 
-    device float* my_vals = out_vals + row * k;
-    device int* my_idxs = out_idxs + row * k;
-
-    for (uint i = 0; i < k; i++) {
-        my_vals[i] = INFINITY;
-        my_idxs[i] = 0;
-    }
-
-    float rq_sqrt = sqrt(r_query[row] + 1e-10f);
-    device const float* D_row = raw_dot + row * n_t;
-
-    for (uint j = 0; j < n_t; j++) {
-        float rt_sqrt = sqrt(r_train[j] + 1e-10f);
-        float dist = 1.0f - D_row[j] / (rq_sqrt * rt_sqrt);
-
-        if (dist >= my_vals[k - 1]) continue;
-
-        uint pos = k - 1;
-        while (pos > 0 && dist < my_vals[pos - 1]) {
-            my_vals[pos] = my_vals[pos - 1];
-            my_idxs[pos] = my_idxs[pos - 1];
-            pos--;
+        for (uint i = 0; i < k; i++) {
+            my_vals[i] = INFINITY;
+            my_idxs[i] = 0;
         }
-        my_vals[pos] = dist;
-        my_idxs[pos] = int(j);
+
+        float rq_sqrt = sqrt(r_query[row] + 1e-10f);
+        device const float* D_row = raw_dot + row * n_t;
+
+        for (uint j = 0; j < n_t; j++) {
+            float rt_sqrt = sqrt(r_train[j] + 1e-10f);
+            float dist = 1.0f - D_row[j] / (rq_sqrt * rt_sqrt);
+
+            if (dist >= my_vals[k - 1]) continue;
+
+            uint pos = k - 1;
+            while (pos > 0 && dist < my_vals[pos - 1]) {
+                my_vals[pos] = my_vals[pos - 1];
+                my_idxs[pos] = my_idxs[pos - 1];
+                pos--;
+            }
+            my_vals[pos] = dist;
+            my_idxs[pos] = int(j);
+        }
     }
 }
 

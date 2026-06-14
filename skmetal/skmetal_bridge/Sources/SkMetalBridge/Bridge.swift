@@ -82,16 +82,9 @@ public func skmetal_gemm(
     let matrixB = MPSMatrix(buffer: bufferB, descriptor: descB)
     let matrixC = MPSMatrix(buffer: bufferC, descriptor: descC)
 
-    let gemm = MPSMatrixMultiplication(
-        device: ctx.device,
-        transposeLeft: transA_,
-        transposeRight: transB_,
-        resultRows: M,
-        resultColumns: N,
-        interiorColumns: K,
-        alpha: Double(alpha),
-        beta: Double(beta)
-    )
+    let gemm = ctx.getMPSGemm(transposeLeft: transA_, transposeRight: transB_,
+                               resultRows: M, resultColumns: N, interiorColumns: K,
+                               alpha: Double(alpha), beta: Double(beta))
 
     gemm.encode(commandBuffer: commandBuffer, leftMatrix: matrixA, rightMatrix: matrixB, resultMatrix: matrixC)
     commandBuffer.commit()
@@ -421,8 +414,11 @@ public func skmetal_scaler_fit(
     encoder.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 3)
     encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 4)
 
+    let blockCols = 8
+    let tgCount = (d + blockCols - 1) / blockCols
+
     let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
-    let gridSize = MTLSize(width: d, height: 1, depth: 1)
+    let gridSize = MTLSize(width: tgCount, height: 1, depth: 1)
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
     encoder.endEncoding()
 
@@ -464,8 +460,11 @@ public func skmetal_column_minmax(
     encoder.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 3)
     encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 4)
 
+    let blockColsMM = 8
+    let tgCountMM = (d + blockColsMM - 1) / blockColsMM
+
     let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
-    let gridSize = MTLSize(width: d, height: 1, depth: 1)
+    let gridSize = MTLSize(width: tgCountMM, height: 1, depth: 1)
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
     encoder.endEncoding()
 
@@ -786,7 +785,7 @@ public func skmetal_ridge_fit(
 
     let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
 
-    // Step 1: column means of X (one threadgroup per column, 256 threads each)
+    // Step 1: column means of X (tiled: processes blockCols columns per threadgroup)
     var nU: UInt32 = UInt32(n)
     var pU: UInt32 = UInt32(p)
     let computeEncoder = commandBuffer.makeComputeCommandEncoder()!
@@ -796,8 +795,10 @@ public func skmetal_ridge_fit(
         computeEncoder.setBuffer(meanBuffer, offset: 0, index: 1)
         computeEncoder.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
         computeEncoder.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
+        let blockCols = 8
+        let tgCount = (p + blockCols - 1) / blockCols
         let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-        computeEncoder.dispatchThreadgroups(MTLSize(width: p, height: 1, depth: 1),
+        computeEncoder.dispatchThreadgroups(MTLSize(width: tgCount, height: 1, depth: 1),
                                             threadsPerThreadgroup: tgSize)
     }
     computeEncoder.endEncoding()
@@ -1421,9 +1422,9 @@ public func skmetal_kmeans_batch_fused(
     var pcBuffer: MTLBuffer?
     var pnBuffer: MTLBuffer?
 
-    // Fused assign+partial path: k*d <= 7168 (28 KB threadgroup) and k <= 256
+    // Fused assign+partial path: k*(d+1) <= 7168 (28 KB threadgroup, padded stride) and k <= 256
     // Saves 1 dispatch + 1 blit per iteration vs separate assign+partial_sum.
-    if k * d <= 7168 && k <= 256 {
+    if k * (d + 1) <= 7168 && k <= 256 {
         guard let assignPartialPipeline = ctx.getPipeline(
                 name: "kmeans_assign_partial", functionName: "kmeans_assign_partial"),
               let combineNormPipeline = ctx.getPipeline(
@@ -1481,8 +1482,8 @@ public func skmetal_kmeans_batch_fused(
 
         var ngU = UInt32(numGroups)
 
-        // Max clusters per batch: limited by 28 KB threadgroup memory (7168 floats) + 256 uints
-        let maxBatchClusters = min(256, max(1, 7168 / d))
+        // Max clusters per batch: limited by 28 KB threadgroup memory (7168 floats, padded stride d+1) + 256 uints
+        let maxBatchClusters = min(256, max(1, 7168 / (d + 1)))
 
         for _ in 0..<maxIter {
             let clearEnc = commandBuffer.makeBlitCommandEncoder()!
@@ -1764,7 +1765,7 @@ public func skmetal_knn_tiled_kneighbors(
 
     let cb = ctx.commandQueue.makeCommandBuffer()!
 
-    // Row norms (Euclidean and Cosine only)
+    // Row norms (Euclidean and Cosine only) — batched dispatch
     if !isManhattan, let normPpl = ctx.getPipeline(name: "row_norm_sq", functionName: "row_norm_sq"),
        let rq = rqBuffer, let rt = rtBuffer {
         let enc = cb.makeComputeCommandEncoder()!
@@ -1774,8 +1775,9 @@ public func skmetal_knn_tiled_kneighbors(
         var nqU = UInt32(nQ); var dU = UInt32(d)
         enc.setBytes(&nqU, length: MemoryLayout<UInt32>.stride, index: 2)
         enc.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 3)
-        enc.dispatchThreadgroups(MTLSize(width: nQ, height: 1, depth: 1),
-                                 threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+        let tgNormQ = MTLSize(width: 256, height: 1, depth: 1)
+        enc.dispatchThreadgroups(MTLSize(width: (nQ + 255) / 256, height: 1, depth: 1),
+                                 threadsPerThreadgroup: tgNormQ)
         enc.endEncoding()
 
         let enc2 = cb.makeComputeCommandEncoder()!
@@ -1785,8 +1787,9 @@ public func skmetal_knn_tiled_kneighbors(
         var ntU = UInt32(nT)
         enc2.setBytes(&ntU, length: MemoryLayout<UInt32>.stride, index: 2)
         enc2.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 3)
-        enc2.dispatchThreadgroups(MTLSize(width: nT, height: 1, depth: 1),
-                                  threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+        let tgNormT = MTLSize(width: 256, height: 1, depth: 1)
+        enc2.dispatchThreadgroups(MTLSize(width: (nT + 255) / 256, height: 1, depth: 1),
+                                  threadsPerThreadgroup: tgNormT)
         enc2.endEncoding()
     }
 
@@ -1838,27 +1841,22 @@ public func skmetal_knn_tiled_kneighbors(
                                      rowBytes: d * fs, dataType: .float32)
     let matrixQ = MPSMatrix(buffer: xQueryBuffer, descriptor: descQ)
 
-    let tg1 = MTLSize(width: 1, height: 1, depth: 1)
+    // Batch dispatch: process multiple query rows per threadgroup
+    let batchSize = min(32, max(1, nQ))
+    let tgBatch = MTLSize(width: batchSize, height: 1, depth: 1)
+    let gridBatch = MTLSize(width: (nQ + batchSize - 1) / batchSize, height: 1, depth: 1)
 
     var tileStart = 0
     while tileStart < nT {
         let tileEnd = min(tileStart + tileSize, nT)
         let tileN = tileEnd - tileStart
 
-        // X_train tile slice (all metrics)
-        let trainSlicePtr = xTrainBuffer.contents().advanced(by: tileStart * d * fs)
-        guard let trainSliceBuffer = ctx.device.makeBuffer(
-            bytesNoCopy: trainSlicePtr,
-            length: tileN * d * fs,
-            options: .storageModeShared,
-            deallocator: nil) else { return 1 }
-
         if isManhattan {
             // Manhattan select: direct L1, no GEMM or norms
             let encSel = cb.makeComputeCommandEncoder()!
             encSel.setComputePipelineState(selectPipeline)
             encSel.setBuffer(xQueryBuffer, offset: 0, index: 0)
-            encSel.setBuffer(trainSliceBuffer, offset: 0, index: 1)
+            encSel.setBuffer(xTrainBuffer, offset: tileStart * d * fs, index: 1)
             encSel.setBuffer(tValsBuffer, offset: 0, index: 2)
             encSel.setBuffer(tIdxsBuffer, offset: 0, index: 3)
             var nqU = UInt32(nQ); var tnU = UInt32(tileN); var dU = UInt32(d); var kU = UInt32(k)
@@ -1866,13 +1864,18 @@ public func skmetal_knn_tiled_kneighbors(
             encSel.setBytes(&tnU, length: MemoryLayout<UInt32>.stride, index: 5)
             encSel.setBytes(&dU, length: MemoryLayout<UInt32>.stride, index: 6)
             encSel.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
-            encSel.dispatchThreadgroups(MTLSize(width: nQ, height: 1, depth: 1),
-                                        threadsPerThreadgroup: tg1)
+            encSel.dispatchThreadgroups(gridBatch, threadsPerThreadgroup: tgBatch)
             encSel.endEncoding()
         } else {
             guard let rq = rqBuffer, let rt = rtBuffer, let db = dotBuffer else { return 1 }
 
-            // rt tile slice
+            // GEMM — X_query @ X_train_tile^T
+            let trainSlicePtr = xTrainBuffer.contents().advanced(by: tileStart * d * fs)
+            guard let trainSliceBuffer = ctx.device.makeBuffer(
+                bytesNoCopy: trainSlicePtr,
+                length: tileN * d * fs,
+                options: .storageModeShared,
+                deallocator: nil) else { return 1 }
             let rtSlicePtr = rt.contents().advanced(by: tileStart * fs)
             guard let rtSliceBuffer = ctx.device.makeBuffer(
                 bytesNoCopy: rtSlicePtr,
@@ -1880,7 +1883,6 @@ public func skmetal_knn_tiled_kneighbors(
                 options: .storageModeShared,
                 deallocator: nil) else { return 1 }
 
-            // GEMM — X_query @ X_train_tile^T
             let descTSlice = MPSMatrixDescriptor(dimensions: tileN, columns: d,
                                                  rowBytes: d * fs, dataType: .float32)
             let descDot = MPSMatrixDescriptor(dimensions: nQ, columns: tileN,
@@ -1907,8 +1909,7 @@ public func skmetal_knn_tiled_kneighbors(
             encSel.setBytes(&nqU, length: MemoryLayout<UInt32>.stride, index: 5)
             encSel.setBytes(&tnU, length: MemoryLayout<UInt32>.stride, index: 6)
             encSel.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
-            encSel.dispatchThreadgroups(MTLSize(width: nQ, height: 1, depth: 1),
-                                        threadsPerThreadgroup: tg1)
+            encSel.dispatchThreadgroups(gridBatch, threadsPerThreadgroup: tgBatch)
             encSel.endEncoding()
         }
 
@@ -1926,8 +1927,7 @@ public func skmetal_knn_tiled_kneighbors(
         encMerge.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
         var tsU = UInt32(tileStart)
         encMerge.setBytes(&tsU, length: MemoryLayout<UInt32>.stride, index: 8)
-        encMerge.dispatchThreadgroups(MTLSize(width: nQ, height: 1, depth: 1),
-                                      threadsPerThreadgroup: tg1)
+        encMerge.dispatchThreadgroups(gridBatch, threadsPerThreadgroup: tgBatch)
         encMerge.endEncoding()
 
         tileStart += tileSize
@@ -2098,50 +2098,54 @@ public func skmetal_fista_fit(
         let mV = MPSMatrix(buffer: vBuf, descriptor: colDesc)
         let mU = MPSMatrix(buffer: uBuf, descriptor: colDesc)
 
+        // Batch power iterations: group every `groupSize` iters into one commit
         let powerIters = 20
-        for _ in 0..<powerIters {
+        let groupSize = 5
+        for batchStart in stride(from: 0, to: powerIters, by: groupSize) {
+            let batchEnd = min(batchStart + groupSize, powerIters)
             let cb = ctx.commandQueue.makeCommandBuffer()!
 
-            let gemm = MPSMatrixMultiplication(
-                device: ctx.device, transposeLeft: false, transposeRight: false,
-                resultRows: p, resultColumns: 1, interiorColumns: p,
-                alpha: 1.0, beta: 0.0)
-            gemm.encode(commandBuffer: cb, leftMatrix: mXTX, rightMatrix: mV, resultMatrix: mU)
+            for _ in batchStart..<batchEnd {
+                let gemm = ctx.getMPSGemm(transposeLeft: false, transposeRight: false,
+                                           resultRows: p, resultColumns: 1, interiorColumns: p,
+                                           alpha: 1.0, beta: 0.0)
+                gemm.encode(commandBuffer: cb, leftMatrix: mXTX, rightMatrix: mV, resultMatrix: mU)
 
-            // norm_sq: vBuf = uBuf^2
-            let encNS = cb.makeComputeCommandEncoder()!
-            encNS.setComputePipelineState(nsPpl)
-            encNS.setBuffer(uBuf, offset: 0, index: 0)
-            encNS.setBuffer(vBuf, offset: 0, index: 1)
-            var nU32 = UInt32(p)
-            encNS.setBytes(&nU32, length: MemoryLayout<UInt32>.stride, index: 2)
-            encNS.dispatchThreadgroups(MTLSize(width: (p + 255) / 256, height: 1, depth: 1),
-                                       threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            encNS.endEncoding()
+                let encNS = cb.makeComputeCommandEncoder()!
+                encNS.setComputePipelineState(nsPpl)
+                encNS.setBuffer(uBuf, offset: 0, index: 0)
+                encNS.setBuffer(vBuf, offset: 0, index: 1)
+                var nU32 = UInt32(p)
+                encNS.setBytes(&nU32, length: MemoryLayout<UInt32>.stride, index: 2)
+                encNS.dispatchThreadgroups(MTLSize(width: (p + 255) / 256, height: 1, depth: 1),
+                                           threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+                encNS.endEncoding()
 
-            // reduce_sum: sum vBuf into sumBuf
-            let ng = max(1, (p + 255) / 256)
-            let encRS = cb.makeComputeCommandEncoder()!
-            encRS.setComputePipelineState(rsPpl)
-            encRS.setBuffer(vBuf, offset: 0, index: 0)
-            encRS.setBuffer(sumBuf, offset: 0, index: 1)
-            nU32 = UInt32(p)
-            encRS.setBytes(&nU32, length: MemoryLayout<UInt32>.stride, index: 2)
-            var ngU32 = UInt32(ng)
-            encRS.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
-            encRS.dispatchThreadgroups(MTLSize(width: ng, height: 1, depth: 1),
-                                       threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            encRS.endEncoding()
+                let ng = max(1, (p + 255) / 256)
+                let encRS = cb.makeComputeCommandEncoder()!
+                encRS.setComputePipelineState(rsPpl)
+                encRS.setBuffer(vBuf, offset: 0, index: 0)
+                encRS.setBuffer(sumBuf, offset: 0, index: 1)
+                nU32 = UInt32(p)
+                encRS.setBytes(&nU32, length: MemoryLayout<UInt32>.stride, index: 2)
+                var ngU32 = UInt32(ng)
+                encRS.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
+                encRS.dispatchThreadgroups(MTLSize(width: ng, height: 1, depth: 1),
+                                           threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+                encRS.endEncoding()
+            }
 
             cb.commit()
             cb.waitUntilCompleted()
 
-            let norm = sqrt(sumBuf.contents().load(as: Float.self))
-            if norm < 1e-10 { break }
-
-            // Normalize on CPU: v = u / norm
+            // CPU normalization after each batch (1 read per batch instead of per iter)
             let uPtr = uBuf.contents().assumingMemoryBound(to: Float.self)
-            for i in 0..<p { vPtr[i] = uPtr[i] / norm }
+            let sumPtr = sumBuf.contents().assumingMemoryBound(to: Float.self)
+            for _ in batchStart..<batchEnd {
+                let norm = sqrt(sumPtr[0])
+                if norm < 1e-10 { break }
+                for i in 0..<p { vPtr[i] = uPtr[i] / norm }
+            }
         }
 
         // Rayleigh quotient: L = v^T @ (XTX @ v) / ||v||^2
@@ -2158,16 +2162,21 @@ public func skmetal_fista_fit(
     let enDenom: Float = (l1_ratio < 1.0) ? (1.0 + step * alpha * (1.0 - l1_ratio) * Float(n)) : 1.0
     let enScale: Float = (enDenom != 1.0) ? (1.0 / enDenom) : 1.0
 
-    // Step 4: FISTA loop
-    let checkEvery = 10
+    // Step 4: FISTA loop batched (multiple iterations per commit)
+    let batchSize = 5
+    let checkEvery = 25
     let tg256 = MTLSize(width: 256, height: 1, depth: 1)
     let grd256 = MTLSize(width: (p + 255) / 256, height: 1, depth: 1)
     var t: Float = 1.0
     var it: Int32 = 0
 
-    for itCount in 0..<Int(max_iter) {
-        it = Int32(itCount + 1)
+    var itCount = 0
+    while itCount < Int(max_iter) {
+        let batchEnd = min(itCount + batchSize, Int(max_iter))
         let cb = ctx.commandQueue.makeCommandBuffer()!
+
+        for batchIt in itCount..<batchEnd {
+            it = Int32(batchIt + 1)
 
         // 1. x_prev = x (blit copy)
         let blit1 = cb.makeBlitCommandEncoder()!
@@ -2268,11 +2277,14 @@ public func skmetal_fista_fit(
         encZUp.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
         encZUp.endEncoding()
 
+        } // end inner batch loop
+
         cb.commit()
         cb.waitUntilCompleted()
 
-        // Convergence check
-        if itCount % checkEvery == 0 || itCount == Int(max_iter) - 1 {
+        // Convergence check (after each batch)
+        itCount = batchEnd
+        if batchEnd % checkEvery == 0 || batchEnd >= Int(max_iter) - 1 {
             let xP = xBuf_g.contents().assumingMemoryBound(to: Float.self)
             let xPrevP = xPrevBuf.contents().assumingMemoryBound(to: Float.self)
             var diff: Float = 0
@@ -2282,7 +2294,7 @@ public func skmetal_fista_fit(
             }
             if diff < tol { break }
         }
-    }
+    } // end outer batch while
 
     memcpy(coefBuf.contents(), xBuf_g.contents(), pBufSize)
     n_iter_out?.pointee = it
@@ -2602,6 +2614,7 @@ public func skmetal_row_max(
         return 1
     }
 
+    let tgRowMax = MTLSize(width: 256, height: 1, depth: 1)
     let cb = ctx.commandQueue.makeCommandBuffer()!
     let enc = cb.makeComputeCommandEncoder()!
     enc.setComputePipelineState(pipeline)
@@ -2610,8 +2623,8 @@ public func skmetal_row_max(
     var nU = UInt32(n); var ncU = UInt32(nCols)
     enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
     enc.setBytes(&ncU, length: MemoryLayout<UInt32>.stride, index: 3)
-    enc.dispatchThreadgroups(MTLSize(width: n, height: 1, depth: 1),
-                             threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+    enc.dispatchThreadgroups(MTLSize(width: (n + 255) / 256, height: 1, depth: 1),
+                             threadsPerThreadgroup: tgRowMax)
     enc.endEncoding()
     cb.commit()
     cb.waitUntilCompleted()
@@ -2637,6 +2650,7 @@ public func skmetal_row_sum(
         return 1
     }
 
+    let tgRowSum = MTLSize(width: 256, height: 1, depth: 1)
     let cb = ctx.commandQueue.makeCommandBuffer()!
     let enc = cb.makeComputeCommandEncoder()!
     enc.setComputePipelineState(pipeline)
@@ -2645,8 +2659,8 @@ public func skmetal_row_sum(
     var nU = UInt32(n); var ncU = UInt32(nCols)
     enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
     enc.setBytes(&ncU, length: MemoryLayout<UInt32>.stride, index: 3)
-    enc.dispatchThreadgroups(MTLSize(width: n, height: 1, depth: 1),
-                             threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+    enc.dispatchThreadgroups(MTLSize(width: (n + 255) / 256, height: 1, depth: 1),
+                             threadsPerThreadgroup: tgRowSum)
     enc.endEncoding()
     cb.commit()
     cb.waitUntilCompleted()
@@ -3895,6 +3909,7 @@ public func skmetal_warmup() -> Int32 {
         ("reduce_sum", "reduce_sum"),
         ("reduce_mean_var", "reduce_mean_var"),
         ("pairwise_distance_direct", "pairwise_distance_direct"),
+        ("pairwise_distance_squared", "pairwise_distance_squared"),
         ("row_norm_sq", "row_norm_sq"),
         ("distance_correct", "distance_correct"),
         ("argmin_rows", "argmin_rows"),
@@ -3902,6 +3917,7 @@ public func skmetal_warmup() -> Int32 {
         ("column_minmax", "column_minmax"),
         ("irls_weight", "irls_weight"),
         ("scale_rows", "scale_rows"),
+        ("scale_f32", "scale_f32"),
         ("sigmoid", "sigmoid"),
         ("subtract", "subtract"),
         ("axpy", "axpy"),
@@ -3911,11 +3927,19 @@ public func skmetal_warmup() -> Int32 {
         ("center_columns", "center_columns"),
         ("compute_mindists", "compute_mindists"),
         ("kmeans_assign", "kmeans_assign"),
+        ("kmeans_assign_partial", "kmeans_assign_partial"),
         ("kmeans_partial_sum", "kmeans_partial_sum"),
+        ("kmeans_combine", "kmeans_combine"),
         ("kmeans_combine_normalize", "kmeans_combine_normalize"),
+        ("kmeans_normalize", "kmeans_normalize"),
+        ("knn_select_tile_topk", "knn_select_tile_topk"),
+        ("knn_select_tile_topk_manhattan", "knn_select_tile_topk_manhattan"),
+        ("knn_select_tile_topk_cosine", "knn_select_tile_topk_cosine"),
         ("knn_merge_topk", "knn_merge_topk"),
         ("knn_vote_classify", "knn_vote_classify"),
         ("knn_vote_regress", "knn_vote_regress"),
+        ("knn_vote_classify_weighted", "knn_vote_classify_weighted"),
+        ("knn_vote_regress_weighted", "knn_vote_regress_weighted"),
         ("soft_threshold", "soft_threshold"),
         ("column_transform", "column_transform"),
         ("transpose_f32", "transpose_f32"),
@@ -3938,6 +3962,7 @@ public func skmetal_warmup() -> Int32 {
         ("fill_f32", "fill_f32"),
         ("softmax_residual", "softmax_residual"),
         ("svc_predict_binary", "svc_predict_binary"),
+        ("gemm_simple", "gemm_simple"),
         ("convert_f32_to_f16", "convert_f32_to_f16"),
         ("convert_f16_to_f32", "convert_f16_to_f32"),
     ]
