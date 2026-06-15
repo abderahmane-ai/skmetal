@@ -2,8 +2,10 @@
 Exits with code 1 if any speedup regresses beyond threshold.
 
 Usage:
-    python benchmarks/check_regression.py          # check against baseline
-    python benchmarks/check_regression.py --update  # update baseline with results
+    python benchmarks/check_regression.py                  # check Metal bridge
+    python benchmarks/check_regression.py --mlx             # check MLX backends
+    python benchmarks/check_regression.py --update          # update baseline
+    python benchmarks/check_regression.py --mlx --update    # update MLX baseline
 """
 import json
 import sys
@@ -11,9 +13,18 @@ from pathlib import Path
 
 from benchmark_suite import BENCHMARKS, benchmark
 
-THRESHOLD = 0.80  # new speedup must be >= 80% of stored baseline
-baseline_path = Path(__file__).parent / "baseline.json"
+THRESHOLD = 0.80
+use_mlx = "--mlx" in sys.argv
 update = "--update" in sys.argv
+
+if use_mlx:
+    from skmetal.estimators._mlx_registry import has_mlx
+    if not has_mlx():
+        print("MLX not installed — skipping MLX regression check")
+        sys.exit(0)
+    from benchmark_mlx import MLX_BENCHMARKS as BENCHMARKS, benchmark  # noqa: F811
+
+baseline_path = Path(__file__).parent / ("baseline_mlx.json" if use_mlx else "baseline.json")
 
 
 def load_baseline():

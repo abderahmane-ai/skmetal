@@ -7,7 +7,7 @@ from .linear_model import MetalLinearRegression, MetalRidge, MetalLogisticRegres
 from .cluster import MetalKMeans, MetalDBSCAN
 
 try:
-    from ._mlx_kmeans import MetalKMeansMLX  # noqa: F401
+    from ._mlx_svd import MetalTruncatedSVDMLX  # noqa: F401
 except ImportError:
     pass
 from .naive_bayes import MetalGaussianNB
@@ -29,7 +29,6 @@ __all__ = [
     "MetalElasticNet",
 
     "MetalKMeans",
-    "MetalKMeansMLX",
     "MetalDBSCAN",
     "MetalGaussianNB",
     "MetalStandardScaler",
@@ -44,4 +43,5 @@ __all__ = [
     "MetalSVC",
     "MetalSVR",
     "MetalTruncatedSVD",
+    "MetalTruncatedSVDMLX",
 ]

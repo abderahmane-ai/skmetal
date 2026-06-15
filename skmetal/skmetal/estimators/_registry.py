@@ -13,16 +13,11 @@ from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor, Nearest
 from sklearn.ensemble import HistGradientBoostingRegressor, HistGradientBoostingClassifier
 from sklearn.svm import SVC, SVR
 
-_HAS_MLX = False
-try:
-    import mlx.core  # noqa: F401
-    _HAS_MLX = True
-except ImportError:
-    pass
+from ._mlx_registry import has_mlx
 
-_KMEANS_CLASS = "MetalKMeansMLX" if _HAS_MLX else "MetalKMeans"
+_HAS_MLX = has_mlx()
 
-# Maps sklearn class → (python_module, gpu_class_name).
+# Maps sklearn class -> (python_module, gpu_class_name).
 # This is the ONLY place where this mapping lives. _dispatch.py consumes it directly.
 GPU_REGISTRY: dict[type, tuple[str, str]] = {
     LinearRegression:                ("skmetal.estimators.linear_model", "MetalLinearRegression"),
@@ -32,7 +27,7 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
     ElasticNet:                      ("skmetal.estimators.linear_model", "MetalElasticNet"),
 
     TruncatedSVD:                    ("skmetal.estimators.decomposition", "MetalTruncatedSVD"),
-    KMeans:                          ("skmetal.estimators.cluster",       _KMEANS_CLASS),
+    KMeans:                          ("skmetal.estimators.cluster",       "MetalKMeans"),
     DBSCAN:                          ("skmetal.estimators.cluster",       "MetalDBSCAN"),
     GaussianNB:                      ("skmetal.estimators.naive_bayes",   "MetalGaussianNB"),
 
@@ -51,5 +46,11 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
     SVR:                             ("skmetal.estimators.svm",          "MetalSVR"),
 }
 
-# Derived map: sklearn class → GPU class name. Computed from GPU_REGISTRY.
+# Merge MLX registry when available — only TruncatedSVD benefits from MLX.
+# Other iterative estimators (Lasso, EN, LogReg, KMeans) stay on Metal bridge
+# because mx.compile is unsuitable for iterative control flow.
+if _HAS_MLX:
+    GPU_REGISTRY[TruncatedSVD] = ("skmetal.estimators._mlx_svd", "MetalTruncatedSVDMLX")
+
+# Derived map: sklearn class -> GPU class name. Computed from GPU_REGISTRY.
 GPU_ESTIMATORS: dict[type, str] = {cls: name for cls, (_, name) in GPU_REGISTRY.items()}

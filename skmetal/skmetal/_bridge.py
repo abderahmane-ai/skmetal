@@ -2,8 +2,16 @@
 import ctypes
 import platform
 import sys
+import warnings
 import numpy as np
 from pathlib import Path
+
+_HAS_MLX = False
+try:
+    import mlx.core as mx
+    _HAS_MLX = True
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
 # Platform detection — skmetal only works on Apple Silicon macOS 14+.
@@ -197,12 +205,65 @@ def _should_use_f16(A: np.ndarray, B: np.ndarray) -> bool:
             and M >= 128 and N >= 128 and K >= 128)
 
 
+# ---------------------------------------------------------------------------
+# MLX-native GEMM — avoids ctypes/dylib overhead when MLX is available
+# ---------------------------------------------------------------------------
+
+def _use_mlx_gemm(A: np.ndarray, B: np.ndarray, trans_A: bool = False,
+                  trans_B: bool = False) -> bool:
+    """Check if MLX GEMM should be used instead of Metal bridge.
+
+    MLX matmul is preferred when available because it avoids ctypes data
+    pointer passing and the f32→f16→f32 conversion round-trip.
+    """
+    if not _HAS_MLX:
+        return False
+    M, K = (A.shape[1], A.shape[0]) if trans_A else (A.shape[0], A.shape[1])
+    K2, N = (B.shape[1], B.shape[0]) if trans_B else (B.shape[0], B.shape[1])
+    # MLX matmul amortization: skip for trivially small ops
+    return M * N * K >= 4096
+
+
+def _gemm_mlx(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
+              trans_A=False, trans_B=False) -> np.ndarray:
+    """MLX-native GEMM — zero dylib overhead, zero ctypes conversion."""
+    A_mx = mx.array(A if not trans_A else A.T, dtype=mx.float32)
+    B_mx = mx.array(B if not trans_B else B.T, dtype=mx.float32)
+    result = alpha * (A_mx @ B_mx)
+    if beta != 0.0:
+        result = result + beta * mx.zeros_like(result)
+    return np.array(result)
+
+
+def _should_use_f16_mlx(A: np.ndarray, B: np.ndarray) -> bool:
+    """Check if MLX native float16 GEMM is beneficial."""
+    if not _HAS_MLX:
+        return False
+    if not (A.dtype == np.float32 and B.dtype == np.float32):
+        return False
+    M, K = A.shape
+    K2, N = B.shape
+    if K != K2:
+        return False
+    return M >= 128 and N >= 128 and K >= 128
+
+
+def _gemm_f16_mlx(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """MLX-native float16 GEMM — skips Metal bridge f16 converter entirely."""
+    A_mx = mx.array(A, dtype=mx.float16)
+    B_mx = mx.array(B, dtype=mx.float16)
+    C_mx = A_mx @ B_mx
+    return np.array(C_mx, dtype=np.float32)
+
+
 def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
          trans_A=False, trans_B=False) -> np.ndarray:
     """C = alpha * op(A) @ op(B) + beta * C (zero-copy).
 
-    Uses float16 path for small aligned matrices (2× throughput),
-    falls back to float32 MPS GEMM otherwise.
+    Routing priority:
+    1. MLX native GEMM (when MLX available + problem large enough)
+    2. Metal bridge float16 simdgroup GEMM (small aligned matrices)
+    3. Metal bridge float32 MPS GEMM (fallback)
     """
     if A.dtype != np.float32 or B.dtype != np.float32:
         raise TypeError("A and B must be float32")
@@ -213,6 +274,22 @@ def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
     if K != K2:
         raise ValueError(f"Incompatible dimensions: A {A.shape}, B {B.shape}")
 
+    # Priority 1: MLX-native float16 GEMM (2× throughput, native mx.float16)
+    if not trans_A and not trans_B and alpha == 1.0 and beta == 0.0:
+        if _should_use_f16_mlx(A, B):
+            try:
+                return _gemm_f16_mlx(A, B)
+            except Exception:
+                pass
+
+    # Priority 2: MLX-native float32 GEMM (skips ctypes/dylib overhead)
+    if _use_mlx_gemm(A, B, trans_A, trans_B):
+        try:
+            return _gemm_mlx(A, B, alpha, beta, trans_A, trans_B)
+        except Exception:
+            pass
+
+    # Priority 3: Metal bridge float16 simdgroup GEMM
     if not trans_A and not trans_B and alpha == 1.0 and beta == 0.0:
         if _should_use_f16(A, B):
             try:
@@ -223,6 +300,7 @@ def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
             except (RuntimeError, TypeError):
                 pass
 
+    # Priority 4: Metal bridge float32 MPS GEMM
     C = np.empty((M, N), dtype=np.float32, order="C")
     _bridge_call(_lib.skmetal_gemm, A, B, C, M, N, K,
                  ctypes.c_float(alpha), ctypes.c_float(beta),

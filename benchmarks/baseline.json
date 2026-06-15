@@ -1,57 +1,57 @@
 [
   {
     "estimator": "LinearRegression",
-    "cpu_time": 1.2094702500035055,
-    "gpu_time": 0.14835354103706777,
-    "speedup": 8.152621376939738,
+    "cpu_time": 1.226061750000099,
+    "gpu_time": 0.14169175000006362,
+    "speedup": 8.653021435613214,
     "n_samples": 200000,
     "n_features": 500
   },
   {
     "estimator": "Ridge",
-    "cpu_time": 0.1146125000086613,
-    "gpu_time": 0.1263504580128938,
-    "speedup": 0.9070999964002135,
+    "cpu_time": 0.11513616599995657,
+    "gpu_time": 0.13200237499995637,
+    "speedup": 0.8722279883221391,
     "n_samples": 200000,
     "n_features": 500
   },
   {
     "estimator": "LogisticRegression",
-    "cpu_time": 0.029441082966513932,
-    "gpu_time": 0.03204833302879706,
-    "speedup": 0.9186463127445542,
+    "cpu_time": 0.029727791999903275,
+    "gpu_time": 0.031960499999968306,
+    "speedup": 0.930141643589204,
     "n_samples": 100000,
     "n_features": 200
   },
   {
     "estimator": "TruncatedSVD",
-    "cpu_time": 0.28090287500526756,
-    "gpu_time": 0.0781520830350928,
-    "speedup": 3.594310786049466,
+    "cpu_time": 0.2831482500000675,
+    "gpu_time": 0.0924774160000652,
+    "speedup": 3.061809707138312,
     "n_samples": 100000,
     "n_features": 500
   },
   {
     "estimator": "KMeans",
-    "cpu_time": 3.515451541985385,
-    "gpu_time": 5.224565459007863,
-    "speedup": 0.6728696519486166,
+    "cpu_time": 3.316581167000095,
+    "gpu_time": 3.908883916999912,
+    "speedup": 0.8484726682662881,
     "n_samples": 500000,
     "n_features": 100
   },
   {
     "estimator": "StandardScaler",
-    "cpu_time": 0.2936426250380464,
-    "gpu_time": 0.04856312501942739,
-    "speedup": 6.046617159018832,
+    "cpu_time": 0.2922752499998751,
+    "gpu_time": 0.04155208299971491,
+    "speedup": 7.033949417214063,
     "n_samples": 1000000,
     "n_features": 100
   },
   {
     "estimator": "MinMaxScaler",
-    "cpu_time": 0.04067466699052602,
-    "gpu_time": 0.036595917015802115,
-    "speedup": 1.1114536895731484,
+    "cpu_time": 0.043935540999882505,
+    "gpu_time": 0.03712999999970634,
+    "speedup": 1.1832895502351195,
     "n_samples": 1000000,
     "n_features": 100
   }
