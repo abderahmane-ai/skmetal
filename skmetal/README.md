@@ -38,8 +38,14 @@ macOS 14+ and Apple Silicon (M1–M5) required. No Xcode needed — the pip pack
 ```bash
 git clone https://github.com/abderahmane-ai/skmetal.git
 cd skmetal
-bash build.sh
 pip install -e ".[dev]"
+
+# Build Swift + Metal (required after any .metal or .swift change)
+cd skmetal_bridge
+bash compile_metal.sh
+swift build --configuration release
+cp .build/arm64-apple-macosx/release/libSkMetalBridge.dylib ../skmetal/
+cd ..
 ```
 
 ---
@@ -180,7 +186,7 @@ numpy array → np.ctypes.data → UnsafeMutableRawPointer → MTLBuffer(bytesNo
                    +--------- same physical memory (unified) -----------+
 ```
 
-Apple Silicon's unified memory architecture enables zero-copy data sharing. The Swift bridge exposes 47 `@_cdecl` functions callable from Python via `ctypes`. Each estimator's `fit()`/`predict()` calls the appropriate bridge function, which dispatches Metal Performance Shaders or custom compute kernels.
+Apple Silicon's unified memory architecture enables zero-copy data sharing. The Swift bridge exposes `@_cdecl` functions callable from Python via `ctypes`. Each estimator's `fit()`/`predict()` calls the appropriate bridge function, which dispatches Metal Performance Shaders or custom compute kernels.
 
 The library decides per-estimator whether to use GPU or CPU based on:
 1. **Availability** — Metal must be present (Apple Silicon + macOS 14+)
@@ -196,7 +202,7 @@ The library decides per-estimator whether to use GPU or CPU based on:
 skmetal/
   skmetal/
     __init__.py        # public API: accelerate, config, device_info
-    _bridge.py         # ctypes → Swift (47 functions)
+    _bridge.py         # ctypes → Swift @_cdecl exports
     _config.py         # Config dataclass, thresholds, device control
     _dispatch.py       # estimator registry + wrapping logic
     accelerate.py      # @accelerate decorator + context manager
@@ -213,10 +219,16 @@ skmetal/
       svm.py           # SVC predict
   skmetal_bridge/      # Swift + Metal
     Sources/SkMetalBridge/
-      Bridge.swift         # 47 @_cdecl exports
-      LogisticBridge.swift # L-BFGS / IRLS GPU loop
-      KNNBridge.swift      # KNN tile-then-merge
-      LinearModelBridge.swift # Cholesky, FISTA, Ridge
+      CoreBridge.swift     # core @_cdecl exports
+      Bridge.swift         # device info, init, warmup
+      KMeansBridge.swift   # KMeans assign, inertia, shift, batch fused
+      KNNBridge.swift      # KNN tile-then-merge, voting
+      LinearAlgebraBridge.swift # GEMM, pairwise distance, column ops
+      LinearModelBridge.swift   # Cholesky solve, FISTA, Ridge
+      LogisticBridge.swift      # L-BFGS / IRLS GPU loop
+      PreprocessingBridge.swift # scaler_fit, column_minmax, column_transform
+      SVCBridge.swift           # SVC predict
+      SVTreeBridge.swift        # union-find, tree predict
       MetalContext.swift
       Kernels/*.metal      # 14 kernel files
   benchmarks/
@@ -241,7 +253,9 @@ skmetal/
 
 ```bash
 git clone https://github.com/abderahmane-ai/skmetal.git
-cd skmetal/skmetal
+cd skmetal
+
+# (optional) Install skmetal in editable mode
 pip install -e ".[dev]"
 
 # Build Swift + Metal (required after any .metal or .swift change)
@@ -252,7 +266,7 @@ cp .build/arm64-apple-macosx/release/libSkMetalBridge.dylib ../skmetal/
 cd ..
 
 # Run tests
-pytest ../tests/ -q
+pytest tests/ -q
 
 # Lint
 ruff check skmetal/ tests/

@@ -29,7 +29,7 @@ def _find_library() -> str:
     raise RuntimeError(
         "SkMetalBridge dylib not found. Build the Swift package first:\n"
         "  cd skmetal_bridge && swift build --configuration release\n"
-        "Then copy the dylib to ~/.local/lib/ or run: skmetal_bridge/build.sh"
+        "Then copy the dylib to ~/.local/lib/ or run: cd skmetal_bridge && bash compile_metal.sh && swift build --configuration release"
     )
 
 
@@ -82,7 +82,6 @@ _BRIDGE_REGISTRY = [
     ("skmetal_scaler_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_column_minmax", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_kmeans_assign", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_kmeans_combine_normalize", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_kmeans_batch_fused", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_compute_mindists", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_gemm", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.c_float, ctypes.c_int, ctypes.c_int),
