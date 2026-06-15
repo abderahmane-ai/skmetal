@@ -529,6 +529,369 @@ public func skmetal_logreg_lbfgs_fit(
     return 0
 }
 
+// MARK: - L-BFGS fit: multinomial LogisticRegression (robust to collinear features)
+
+@_cdecl("skmetal_multinomial_lbfgs_fit")
+public func skmetal_multinomial_lbfgs_fit(
+    X: UnsafeRawPointer,
+    y: UnsafeRawPointer,
+    W_out: UnsafeMutableRawPointer,
+    C: Float,
+    tol: Float,
+    max_iter: Int32,
+    n: Int,
+    p: Int,
+    n_classes: Int,
+    n_iter_out: UnsafeMutablePointer<Int32>?
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let fs = MemoryLayout<Float>.stride
+    let pSize = p * fs
+    let xRowBytes = p * fs
+    let nSize = n * fs
+    let totalParams = p * n_classes
+    let totalSize = totalParams * fs
+
+    let alpha: Float = 1.0 / C
+    let alphaN: Float = alpha / Float(n)  // scaled by n for gradient
+
+    guard let xBuffer = wrapInput(X, length: n * xRowBytes, device: ctx.device),
+          let yBuffer = wrapInput(y, length: n * fs, device: ctx.device) else {
+        return 1
+    }
+
+    let kSize = n_classes * fs  // row bytes for n_classes-wide matrices
+    let wSize = totalParams * fs
+
+    guard let wBuffer = ctx.device.makeBuffer(length: wSize, options: .storageModeShared),
+          let gBuffer = ctx.device.makeBuffer(length: wSize, options: .storageModeShared),
+          let scoresBuffer = ctx.device.makeBuffer(length: n * n_classes * fs, options: .storageModeShared),
+          let probBuffer = ctx.device.makeBuffer(length: n * n_classes * fs, options: .storageModeShared),
+          let resBuffer = ctx.device.makeBuffer(length: n * n_classes * fs, options: .storageModeShared),
+          let lossBuf = ctx.device.makeBuffer(length: nSize, options: .storageModeShared),
+          let sumBuf = ctx.device.makeBuffer(length: max(1, (n + 255) / 256) * fs, options: .storageModeShared) else {
+        return 1
+    }
+    memset(wBuffer.contents(), 0, wSize)
+
+    let descX = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: xRowBytes, dataType: .float32)
+    let descW = MPSMatrixDescriptor(dimensions: p, columns: n_classes, rowBytes: kSize, dataType: .float32)
+    let descScores = MPSMatrixDescriptor(dimensions: n, columns: n_classes, rowBytes: kSize, dataType: .float32)
+    let descRes = MPSMatrixDescriptor(dimensions: n, columns: n_classes, rowBytes: kSize, dataType: .float32)
+    let descG = MPSMatrixDescriptor(dimensions: p, columns: n_classes, rowBytes: kSize, dataType: .float32)
+    let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
+    let matrixW = MPSMatrix(buffer: wBuffer, descriptor: descW)
+    let matrixScores = MPSMatrix(buffer: scoresBuffer, descriptor: descScores)
+    let matrixProb = MPSMatrix(buffer: probBuffer, descriptor: descScores)
+    let matrixRes = MPSMatrix(buffer: resBuffer, descriptor: descRes)
+    let matrixGrad = MPSMatrix(buffer: gBuffer, descriptor: descG)
+
+    // L-BFGS memory (m = 10)
+    let m = 10
+    let mSize = m * totalParams * fs
+    guard let sBuf = ctx.device.makeBuffer(length: mSize, options: .storageModeShared),
+          let yBuf = ctx.device.makeBuffer(length: mSize, options: .storageModeShared),
+          let rhoBuf = ctx.device.makeBuffer(length: m * fs, options: .storageModeShared) else {
+        return 1
+    }
+    let sBase = sBuf.contents().assumingMemoryBound(to: Float.self)
+    let yBase = yBuf.contents().assumingMemoryBound(to: Float.self)
+    let rhoBase = rhoBuf.contents().assumingMemoryBound(to: Float.self)
+
+    let wPtr = wBuffer.contents().assumingMemoryBound(to: Float.self)
+    let gPtr = gBuffer.contents().assumingMemoryBound(to: Float.self)
+    let probPtr = probBuffer.contents().assumingMemoryBound(to: Float.self)
+    let sumPtr = sumBuf.contents().assumingMemoryBound(to: Float.self)
+
+    let maxIter = Int(max_iter)
+    var nIter: Int32 = 0
+
+    var d = [Float](repeating: 0, count: totalParams)
+    var wCpu = [Float](repeating: 0, count: totalParams)
+    var gCpu = [Float](repeating: 0, count: totalParams)
+
+    // ---- GPU compute closures ----
+
+    func computeLoss() -> Float {
+        let ng = max(1, (n + 255) / 256)
+        let cb = ctx.commandQueue.makeCommandBuffer()!
+        if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
+            let enc = cb.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(rsPpl)
+            enc.setBuffer(lossBuf, offset: 0, index: 0)
+            enc.setBuffer(sumBuf, offset: 0, index: 1)
+            var nU = UInt32(n); var ngU = UInt32(ng)
+            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+            enc.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc.dispatchThreadgroups(MTLSize(width: ng, height: 1, depth: 1),
+                                     threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+        cb.commit()
+        cb.waitUntilCompleted()
+        var loss = Float(0)
+        for i in 0..<ng { loss += sumPtr[i] }
+        loss /= Float(n)
+        if alpha != 0 {
+            var wNorm2: Float = 0
+            for i in 0..<totalParams { wNorm2 += wPtr[i] * wPtr[i] }
+            loss += Float(0.5) * alphaN * Float(n) * wNorm2  // α/2 * ||W||²
+        }
+        return loss
+    }
+
+    func computeGradientLoss() -> Float {
+        let cb = ctx.commandQueue.makeCommandBuffer()!
+
+        // 1. scores = X @ W (MPS GEMM)
+        let gemmScores = MPSMatrixMultiplication(
+            device: ctx.device, transposeLeft: false, transposeRight: false,
+            resultRows: n, resultColumns: n_classes, interiorColumns: p,
+            alpha: 1.0, beta: 0.0)
+        gemmScores.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixScores)
+
+        // 2. softmax → probabilities
+        let softmax = MPSMatrixSoftMax(device: ctx.device)
+        softmax.sourceRows = n; softmax.sourceColumns = n_classes
+        softmax.encode(commandBuffer: cb, inputMatrix: matrixScores, resultMatrix: matrixProb)
+
+        // 3. residual = prob - y_enc
+        if let pipeline = ctx.getPipeline(name: "softmax_residual", functionName: "softmax_residual") {
+            let enc = cb.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(pipeline)
+            enc.setBuffer(probBuffer, offset: 0, index: 0)
+            enc.setBuffer(yBuffer, offset: 0, index: 1)
+            enc.setBuffer(resBuffer, offset: 0, index: 2)
+            var nU = UInt32(n); var cU = UInt32(n_classes)
+            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
+            let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+            let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (n + 15) / 16, depth: 1)
+            enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+            enc.endEncoding()
+        }
+
+        // 4. gradient = X^T @ residual / n  (p × n_classes)
+        let gemmGrad = MPSMatrixMultiplication(
+            device: ctx.device, transposeLeft: true, transposeRight: false,
+            resultRows: p, resultColumns: n_classes, interiorColumns: n,
+            alpha: 1.0 / Double(n), beta: 0.0)
+        gemmGrad.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixRes, resultMatrix: matrixGrad)
+
+        // 5. L2: grad[c][i] += alpha * W[i][c]
+        if alpha != 0 {
+            if let pipeline = ctx.getPipeline(name: "multinomial_grad_l2", functionName: "multinomial_grad_l2") {
+                let enc = cb.makeComputeCommandEncoder()!
+                enc.setComputePipelineState(pipeline)
+                enc.setBuffer(gBuffer, offset: 0, index: 0)
+                enc.setBuffer(wBuffer, offset: 0, index: 1)
+                var a = alphaN * Float(n)  // α (unnormalized, matches L2 loss scaling)
+                enc.setBytes(&a, length: fs, index: 2)
+                var pU = UInt32(p); var cU = UInt32(n_classes)
+                enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
+                enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
+                let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+                let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (p + 15) / 16, depth: 1)
+                enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+                enc.endEncoding()
+            }
+        }
+
+        // 6. Cross-entropy loss
+        if let pipeline = ctx.getPipeline(name: "cross_entropy_loss", functionName: "cross_entropy_loss") {
+            let enc = cb.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(pipeline)
+            enc.setBuffer(probBuffer, offset: 0, index: 0)
+            enc.setBuffer(yBuffer, offset: 0, index: 1)
+            enc.setBuffer(lossBuf, offset: 0, index: 2)
+            var nU = UInt32(n); var cU = UInt32(n_classes)
+            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
+            enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+
+        // 7. Reduce sum of loss
+        let ng = max(1, (n + 255) / 256)
+        if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
+            let enc = cb.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(rsPpl)
+            enc.setBuffer(lossBuf, offset: 0, index: 0)
+            enc.setBuffer(sumBuf, offset: 0, index: 1)
+            var nU = UInt32(n); var ngU = UInt32(ng)
+            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+            enc.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc.dispatchThreadgroups(MTLSize(width: ng, height: 1, depth: 1),
+                                     threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+
+        cb.commit()
+        cb.waitUntilCompleted()
+
+        var loss = Float(0)
+        for i in 0..<ng { loss += sumPtr[i] }
+        loss /= Float(n)
+        if alpha != 0 {
+            var wNorm2: Float = 0
+            for i in 0..<totalParams { wNorm2 += wPtr[i] * wPtr[i] }
+            loss += Float(0.5) * alphaN * Float(n) * wNorm2
+        }
+        return loss
+    }
+
+    func computeLossAt(w: [Float]) -> Float {
+        for i in 0..<totalParams { wPtr[i] = w[i] }
+        let cb = ctx.commandQueue.makeCommandBuffer()!
+
+        let gemmScores = MPSMatrixMultiplication(
+            device: ctx.device, transposeLeft: false, transposeRight: false,
+            resultRows: n, resultColumns: n_classes, interiorColumns: p,
+            alpha: 1.0, beta: 0.0)
+        gemmScores.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixScores)
+
+        let softmax = MPSMatrixSoftMax(device: ctx.device)
+        softmax.sourceRows = n; softmax.sourceColumns = n_classes
+        softmax.encode(commandBuffer: cb, inputMatrix: matrixScores, resultMatrix: matrixProb)
+
+        if let pipeline = ctx.getPipeline(name: "cross_entropy_loss", functionName: "cross_entropy_loss") {
+            let enc = cb.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(pipeline)
+            enc.setBuffer(probBuffer, offset: 0, index: 0)
+            enc.setBuffer(yBuffer, offset: 0, index: 1)
+            enc.setBuffer(lossBuf, offset: 0, index: 2)
+            var nU = UInt32(n); var cU = UInt32(n_classes)
+            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
+            enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+
+        let ng = max(1, (n + 255) / 256)
+        if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
+            let enc = cb.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(rsPpl)
+            enc.setBuffer(lossBuf, offset: 0, index: 0)
+            enc.setBuffer(sumBuf, offset: 0, index: 1)
+            var nU = UInt32(n); var ngU = UInt32(ng)
+            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+            enc.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 3)
+            enc.dispatchThreadgroups(MTLSize(width: ng, height: 1, depth: 1),
+                                     threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+        cb.commit()
+        cb.waitUntilCompleted()
+
+        var loss = Float(0)
+        for i in 0..<ng { loss += sumPtr[i] }
+        loss /= Float(n)
+        if alpha != 0 {
+            var wNorm2: Float = 0
+            for i in 0..<totalParams { wNorm2 += w[i] * w[i] }
+            loss += Float(0.5) * alphaN * Float(n) * wNorm2
+        }
+        return loss
+    }
+
+    // ---- Main L-BFGS loop ----
+    var loss = computeGradientLoss()
+    memcpy(&wCpu, wPtr, totalSize)
+    memcpy(&gCpu, gPtr, totalSize)
+
+    for it in 0..<maxIter {
+        nIter = Int32(it + 1)
+
+        var gNorm: Float = 0
+        var wNorm2: Float = 0
+        for i in 0..<totalParams {
+            gNorm = max(gNorm, abs(gCpu[i]))
+            wNorm2 += wCpu[i] * wCpu[i]
+        }
+        let wNorm = sqrt(wNorm2)
+        if gNorm < tol * max(1.0, wNorm) { break }
+
+        let k = min(it, m)
+        var alphaArr = [Float](repeating: 0, count: k)
+        var q = gCpu
+        for i in (0..<k).reversed() {
+            alphaArr[i] = 0
+            for j in 0..<totalParams { alphaArr[i] += sBase[i * totalParams + j] * q[j] }
+            alphaArr[i] *= rhoBase[i]
+            for j in 0..<totalParams { q[j] -= alphaArr[i] * yBase[i * totalParams + j] }
+        }
+
+        var gamma: Float = 1.0
+        if k > 0 {
+            let idx = (it - 1) % m
+            var sy: Float = 0, yy: Float = 0
+            for j in 0..<totalParams {
+                sy += sBase[idx * totalParams + j] * yBase[idx * totalParams + j]
+                yy += yBase[idx * totalParams + j] * yBase[idx * totalParams + j]
+            }
+            if yy > 0 { gamma = sy / yy }
+        }
+
+        for j in 0..<totalParams { d[j] = gamma * q[j] }
+        for i in 0..<k {
+            var beta: Float = 0
+            for j in 0..<totalParams { beta += yBase[i * totalParams + j] * d[j] }
+            beta *= rhoBase[i]
+            for j in 0..<totalParams { d[j] += (alphaArr[i] - beta) * sBase[i * totalParams + j] }
+        }
+        for j in 0..<totalParams { d[j] = -d[j] }
+
+        var gd: Float = 0
+        for j in 0..<totalParams { gd += gCpu[j] * d[j] }
+        if gd >= 0 { break }
+
+        var step: Float = 1.0
+        let c1: Float = 1e-4
+        var wTrial = [Float](repeating: 0, count: totalParams)
+        var lossTrial: Float = 0
+        var accepted = false
+        for _ in 0..<20 {
+            for j in 0..<totalParams { wTrial[j] = wCpu[j] + step * d[j] }
+            lossTrial = computeLossAt(w: wTrial)
+            if lossTrial <= loss + c1 * step * gd {
+                accepted = true
+                break
+            }
+            step *= 0.5
+        }
+        if !accepted { break }
+
+        let idx = it % m
+        let sOff = idx * totalParams
+        let yOff = idx * totalParams
+        for j in 0..<totalParams {
+            sBase[sOff + j] = wTrial[j] - wCpu[j]
+            yBase[yOff + j] = gCpu[j]
+        }
+
+        wCpu = wTrial
+        for j in 0..<totalParams { wPtr[j] = wCpu[j] }
+        let oldGpu = gCpu
+        loss = computeGradientLoss()
+
+        for j in 0..<totalParams {
+            yBase[yOff + j] = gPtr[j] - oldGpu[j]
+            gCpu[j] = gPtr[j]
+        }
+
+        var sy: Float = 0
+        for j in 0..<totalParams { sy += sBase[sOff + j] * yBase[yOff + j] }
+        rhoBase[idx] = sy > 0 ? 1.0 / sy : 0
+    }
+
+    let coefOut = W_out.assumingMemoryBound(to: Float.self)
+    memcpy(coefOut, wPtr, totalSize)
+    n_iter_out?.pointee = nIter
+    return 0
+}
+
 // MARK: - IRLS fit: full multinomial LogisticRegression loop in Swift
 
 @_cdecl("skmetal_multinomial_irls_fit")
@@ -709,29 +1072,12 @@ public func skmetal_multinomial_irls_fit(
             let hPtr = hBase.advanced(by: hOff)
             let gPtr = gBase.advanced(by: gOff)
             var n_ = p32
-            // spptrf writes the Cholesky factor in-place, so back up the
-            // original Hessian before calling it — retries restore + add ridge.
-            let hBack = UnsafeMutablePointer<Float>.allocate(capacity: pPacked)
-            hBack.initialize(from: hPtr, count: pPacked)
-            var ridge: Float = 0
-            while true {
-                spptrf_(&uplo, &n_, hPtr, &info)
-                if info == 0 { break }
-                ridge = ridge == 0 ? max(1e-6, alpha * 1e-3) : ridge * 10
-                if ridge > 1000 {
-                    let msg = String(format: "iter=%d class=%d spptrf failed ridge=%.1e info=%d", nIter, c, ridge, info)
-                    msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
-                    hBack.deallocate()
-                    return 1
-                }
-                // Restore original Hessian, add ridge to diagonal
-                memcpy(hPtr, hBack, pPacked * fs)
-                for i in 0..<p {
-                    let diagIdx = i * (2 * p - i + 1) / 2
-                    hPtr[diagIdx] += ridge
-                }
+            spptrf_(&uplo, &n_, hPtr, &info)
+            if info != 0 {
+                let msg = String(format: "iter=%d class=%d spptrf failed info=%d", nIter, c, info)
+                msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
+                return 1
             }
-            hBack.deallocate()
             spptrs_(&uplo, &n_, &nrhs_, hPtr, gPtr, &ldb_, &info)
             if info != 0 {
                 let msg = String(format: "iter=%d class=%d spptrs failed info=%d", nIter, c, info)

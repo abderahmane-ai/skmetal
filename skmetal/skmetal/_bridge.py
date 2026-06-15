@@ -431,13 +431,13 @@ def logreg_lbfgs_fit(X: np.ndarray, y: np.ndarray, C: float, tol: float,
     return coef, n_iter_out.value
 
 
-def multinomial_irls_fit(X: np.ndarray, y_enc: np.ndarray, C: float, tol: float,
-                          max_iter: int, n_classes: int) -> tuple[np.ndarray, int]:
-    """Full multinomial IRLS fit loop in Swift. Returns (W, n_iter)."""
+def multinomial_lbfgs_fit(X: np.ndarray, y_enc: np.ndarray, C: float, tol: float,
+                           max_iter: int, n_classes: int) -> tuple[np.ndarray, int]:
+    """Full multinomial L-BFGS fit loop in Swift. Returns (W, n_iter)."""
     n, p = X.shape
     W = np.empty((p, n_classes), dtype=np.float32, order="C")
     n_iter_out = ctypes.c_int32(0)
-    _bridge_call(_lib.skmetal_multinomial_irls_fit,
+    _bridge_call(_lib.skmetal_multinomial_lbfgs_fit,
                  X, y_enc, W, ctypes.c_float(C), ctypes.c_float(tol),
                  ctypes.c_int32(max_iter),
                  ctypes.c_size_t(n), ctypes.c_size_t(p), ctypes.c_size_t(n_classes),

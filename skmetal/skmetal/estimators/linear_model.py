@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, ridge_fit_solve, linear_solve, logreg_irls_fit, logreg_lbfgs_fit, multinomial_irls_fit, fista_fit
+from .._bridge import gemm, ridge_fit_solve, linear_solve, logreg_irls_fit, logreg_lbfgs_fit, multinomial_lbfgs_fit, fista_fit
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -217,16 +217,9 @@ class MetalLogisticRegression(BaseGPUEstimator):
         else:
             Xe = X
 
-        # Full multinomial IRLS loop in Swift — single bridge call
+        # Full multinomial L-BFGS loop in Swift — robust to collinear features
         reg_C = self._estimator.C
-        try:
-            W, n_iter = multinomial_irls_fit(Xe, y_enc, reg_C, tol, max_iter, n_classes)
-        except RuntimeError:
-            import warnings
-            warnings.warn("Multinomial IRLS failed on GPU, falling back to CPU L-BFGS")
-            self._fallback_fit_multinomial(X, y, classes)
-            return
-
+        W, n_iter = multinomial_lbfgs_fit(Xe, y_enc, reg_C, tol, max_iter, n_classes)
         self._estimator.n_iter_ = [n_iter]
 
         if fit_intercept:
@@ -237,21 +230,6 @@ class MetalLogisticRegression(BaseGPUEstimator):
             self._estimator.intercept_ = np.zeros(n_classes, dtype=np.float32)
 
         self._estimator.classes_ = classes
-
-    def _fallback_fit_multinomial(self, X, y, classes):
-        """Fallback: fit sklearn's built-in LogisticRegression on CPU."""
-        from sklearn.linear_model import LogisticRegression
-        cpu = LogisticRegression(
-            C=self._estimator.C,
-            tol=self._estimator.tol,
-            max_iter=self._estimator.max_iter,
-            fit_intercept=self._estimator.fit_intercept,
-            solver='lbfgs',
-        )
-        cpu.fit(X, y)
-        self._estimator.coef_ = cpu.coef_
-        self._estimator.intercept_ = cpu.intercept_
-        self._estimator.n_iter_ = cpu.n_iter_
 
     def predict(self, X):
         X = self._validate_data(X)[0]

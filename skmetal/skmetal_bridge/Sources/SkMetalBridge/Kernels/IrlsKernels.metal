@@ -170,6 +170,24 @@ kernel void log_loss_binary(
     }
 }
 
+// Per-element cross-entropy loss for multinomial L-BFGS line search.
+// y encodes the true class as an integer index ∈ [0, C).
+// loss_i[tid] = -log(prob[tid * C + class])
+kernel void cross_entropy_loss(
+    device const float* prob [[buffer(0)]],
+    device const float* y [[buffer(1)]],
+    device float* loss_i [[buffer(2)]],
+    constant uint& n [[buffer(3)]],
+    constant uint& C [[buffer(4)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    uint c = uint(y[tid] + 0.5f);
+    float p = prob[tid * C + c];
+    p = clamp(p, 1e-7f, 1.0f);
+    loss_i[tid] = -log(p);
+}
+
 // L2 regularization gradient term (Hessian diagonal is fused into multinomial_hessians):
 //   gradient[c][i] += alpha * W[i][c]
 // gradient is stored as (C, p) — contiguous per-class
