@@ -66,8 +66,10 @@ public func skmetal_logreg_irls_fit(
         return 1
     }
 
-    // Fused IRLS: encode ALL iterations into 1 command buffer.
+    // Fused IRLS: encode iterations in batches of 20 per command buffer.
+    // Avoids encoding 100s of encoders into one enormous CB.
     let maxIter = Int(max_iter)
+    let cbBatch = 20
     let ng = max(1, (p + 255) / 256)
     let convEntries = ng * 2  // step_norm_sq + w_norm_sq per iteration
     let convBufSize = maxIter * convEntries * fs
@@ -98,129 +100,135 @@ public func skmetal_logreg_irls_fit(
     let cholesky = MPSMatrixDecompositionCholesky(device: ctx.device, lower: true, order: p)
     let solve = MPSMatrixSolveCholesky(device: ctx.device, upper: false, order: p, numberOfRightHandSides: 1)
 
-    let globalCB = ctx.commandQueue.makeCommandBuffer()!
     let tg256 = MTLSize(width: 256, height: 1, depth: 1)
     let ngSize = MTLSize(width: ng, height: 1, depth: 1)
 
-    for it in 0..<maxIter {
-        // X @ w → linear
-        gemmXW.encode(commandBuffer: globalCB, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
+    var globalIt = 0
+    while globalIt < maxIter {
+        let batchEnd = min(globalIt + cbBatch, maxIter)
+        let cb = ctx.commandQueue.makeCommandBuffer()!
 
-        // Sigmoid → weight
-        if let pipeline = ctx.getPipeline(name: "compute_linear_irls", functionName: "compute_linear_irls") {
-            let enc = globalCB.makeComputeCommandEncoder()!
-            enc.setComputePipelineState(pipeline)
-            enc.setBuffer(linearBuffer, offset: 0, index: 0)
-            enc.setBuffer(weightBuffer, offset: 0, index: 1)
-            var b: Float = 0.0
-            enc.setBytes(&b, length: fs, index: 2)
-            var nU = UInt32(n)
-            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-            enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
-                                threadsPerThreadgroup: tg256)
-            enc.endEncoding()
-        }
+        for it in globalIt..<batchEnd {
+            // X @ w → linear
+            gemmXW.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
 
-        // X_scaled = X * sqrt(weight[i]), error = sigmoid - y
-        if let pipeline = ctx.getPipeline(name: "compute_error_scale", functionName: "compute_error_scale") {
-            let enc = globalCB.makeComputeCommandEncoder()!
-            enc.setComputePipelineState(pipeline)
-            enc.setBuffer(linearBuffer, offset: 0, index: 0)
-            enc.setBuffer(yBuffer, offset: 0, index: 1)
-            enc.setBuffer(xBuffer, offset: 0, index: 2)
-            enc.setBuffer(weightBuffer, offset: 0, index: 3)
-            enc.setBuffer(linearBuffer, offset: 0, index: 4)
-            enc.setBuffer(xsBuffer, offset: 0, index: 5)
-            var nU = UInt32(n); var pU = UInt32(p)
-            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 6)
-            enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 7)
-            enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
-                                threadsPerThreadgroup: tg256)
-            enc.endEncoding()
-        }
-
-        // Hessian = X_scaledᵀ @ X_scaled
-        gemmHH.encode(commandBuffer: globalCB, leftMatrix: matrixXS, rightMatrix: matrixXS, resultMatrix: matrixH)
-
-        // Gradient = Xᵀ @ error
-        gemmGrad.encode(commandBuffer: globalCB, leftMatrix: matrixX, rightMatrix: matrixLin, resultMatrix: matrixG)
-
-        // L2: Hessian += α·I, gradient += α·w
-        if alpha != 0 {
-            if let pipeline = ctx.getPipeline(name: "l2_reg_irls", functionName: "l2_reg_irls") {
-                let enc = globalCB.makeComputeCommandEncoder()!
+            // Sigmoid → weight
+            if let pipeline = ctx.getPipeline(name: "compute_linear_irls", functionName: "compute_linear_irls") {
+                let enc = cb.makeComputeCommandEncoder()!
                 enc.setComputePipelineState(pipeline)
-                enc.setBuffer(hBuffer, offset: 0, index: 0)
-                enc.setBuffer(gBuffer, offset: 0, index: 1)
-                enc.setBuffer(wBuffer, offset: 0, index: 2)
-                var a = alpha
-                enc.setBytes(&a, length: fs, index: 3)
-                var pU = UInt32(p)
-                enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 4)
-                enc.dispatchThreads(MTLSize(width: p, height: 1, depth: 1),
+                enc.setBuffer(linearBuffer, offset: 0, index: 0)
+                enc.setBuffer(weightBuffer, offset: 0, index: 1)
+                var b: Float = 0.0
+                enc.setBytes(&b, length: fs, index: 2)
+                var nU = UInt32(n)
+                enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+                enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
                                     threadsPerThreadgroup: tg256)
                 enc.endEncoding()
             }
+
+            // X_scaled = X * sqrt(weight[i]), error = sigmoid - y
+            if let pipeline = ctx.getPipeline(name: "compute_error_scale", functionName: "compute_error_scale") {
+                let enc = cb.makeComputeCommandEncoder()!
+                enc.setComputePipelineState(pipeline)
+                enc.setBuffer(linearBuffer, offset: 0, index: 0)
+                enc.setBuffer(yBuffer, offset: 0, index: 1)
+                enc.setBuffer(xBuffer, offset: 0, index: 2)
+                enc.setBuffer(weightBuffer, offset: 0, index: 3)
+                enc.setBuffer(linearBuffer, offset: 0, index: 4)
+                enc.setBuffer(xsBuffer, offset: 0, index: 5)
+                var nU = UInt32(n); var pU = UInt32(p)
+                enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 6)
+                enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 7)
+                enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                                    threadsPerThreadgroup: tg256)
+                enc.endEncoding()
+            }
+
+            // Hessian = X_scaledᵀ @ X_scaled
+            gemmHH.encode(commandBuffer: cb, leftMatrix: matrixXS, rightMatrix: matrixXS, resultMatrix: matrixH)
+
+            // Gradient = Xᵀ @ error
+            gemmGrad.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixLin, resultMatrix: matrixG)
+
+            // L2: Hessian += α·I, gradient += α·w
+            if alpha != 0 {
+                if let pipeline = ctx.getPipeline(name: "l2_reg_irls", functionName: "l2_reg_irls") {
+                    let enc = cb.makeComputeCommandEncoder()!
+                    enc.setComputePipelineState(pipeline)
+                    enc.setBuffer(hBuffer, offset: 0, index: 0)
+                    enc.setBuffer(gBuffer, offset: 0, index: 1)
+                    enc.setBuffer(wBuffer, offset: 0, index: 2)
+                    var a = alpha
+                    enc.setBytes(&a, length: fs, index: 3)
+                    var pU = UInt32(p)
+                    enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 4)
+                    enc.dispatchThreads(MTLSize(width: p, height: 1, depth: 1),
+                                        threadsPerThreadgroup: tg256)
+                    enc.endEncoding()
+                }
+            }
+
+            // Cholesky solve: H \ g → d
+            cholesky.encode(commandBuffer: cb, sourceMatrix: matrixH, resultMatrix: matrixH, status: statusBuffer)
+            solve.encode(commandBuffer: cb, sourceMatrix: matrixH, rightHandSideMatrix: matrixG, solutionMatrix: matrixD)
+
+            // Snapshot current w (pre-update) for convergence retrieval
+            let snapBlit = cb.makeBlitCommandEncoder()!
+            snapBlit.copy(from: wBuffer, sourceOffset: 0,
+                          to: snapBuf, destinationOffset: it * pSize,
+                          size: pSize)
+            snapBlit.endEncoding()
+
+            // Snapshot Cholesky status
+            let statusBlit = cb.makeBlitCommandEncoder()!
+            statusBlit.copy(from: statusBuffer, sourceOffset: 0,
+                            to: statusSnapBuf, destinationOffset: it * MemoryLayout<Int32>.stride,
+                            size: MemoryLayout<Int32>.stride)
+            statusBlit.endEncoding()
+
+            // ||d||² → convBuf
+            let encStepNorm = cb.makeComputeCommandEncoder()!
+            encStepNorm.setComputePipelineState(norm2Ppl)
+            encStepNorm.setBuffer(dBuffer, offset: 0, index: 0)
+            encStepNorm.setBuffer(convBuf, offset: 0, index: 1)
+            var pU32 = UInt32(p)
+            var ngU32 = UInt32(ng)
+            var stepOff = UInt32(it * convEntries)
+            encStepNorm.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 2)
+            encStepNorm.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
+            encStepNorm.setBytes(&stepOff, length: MemoryLayout<UInt32>.stride, index: 4)
+            encStepNorm.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
+            encStepNorm.endEncoding()
+
+            // ||w||² → convBuf
+            let encWNorm = cb.makeComputeCommandEncoder()!
+            encWNorm.setComputePipelineState(norm2Ppl)
+            encWNorm.setBuffer(wBuffer, offset: 0, index: 0)
+            encWNorm.setBuffer(convBuf, offset: 0, index: 1)
+            var wOff = UInt32(it * convEntries + ng)
+            encWNorm.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 2)
+            encWNorm.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
+            encWNorm.setBytes(&wOff, length: MemoryLayout<UInt32>.stride, index: 4)
+            encWNorm.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
+            encWNorm.endEncoding()
+
+            // w -= d (GPU axpy)
+            let encAxpy = cb.makeComputeCommandEncoder()!
+            encAxpy.setComputePipelineState(axpyPpl)
+            encAxpy.setBuffer(wBuffer, offset: 0, index: 0)
+            encAxpy.setBuffer(dBuffer, offset: 0, index: 1)
+            var negOne: Float = -1.0
+            encAxpy.setBytes(&negOne, length: fs, index: 2)
+            encAxpy.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 3)
+            encAxpy.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
+            encAxpy.endEncoding()
         }
 
-        // Cholesky solve: H \ g → d
-        cholesky.encode(commandBuffer: globalCB, sourceMatrix: matrixH, resultMatrix: matrixH, status: statusBuffer)
-        solve.encode(commandBuffer: globalCB, sourceMatrix: matrixH, rightHandSideMatrix: matrixG, solutionMatrix: matrixD)
-
-        // Snapshot current w (pre-update) for convergence retrieval
-        let snapBlit = globalCB.makeBlitCommandEncoder()!
-        snapBlit.copy(from: wBuffer, sourceOffset: 0,
-                      to: snapBuf, destinationOffset: it * pSize,
-                      size: pSize)
-        snapBlit.endEncoding()
-
-        // Snapshot Cholesky status
-        let statusBlit = globalCB.makeBlitCommandEncoder()!
-        statusBlit.copy(from: statusBuffer, sourceOffset: 0,
-                        to: statusSnapBuf, destinationOffset: it * MemoryLayout<Int32>.stride,
-                        size: MemoryLayout<Int32>.stride)
-        statusBlit.endEncoding()
-
-        // ||d||² → convBuf[it*convEntries .. it*convEntries + ng)
-        let encStepNorm = globalCB.makeComputeCommandEncoder()!
-        encStepNorm.setComputePipelineState(norm2Ppl)
-        encStepNorm.setBuffer(dBuffer, offset: 0, index: 0)
-        encStepNorm.setBuffer(convBuf, offset: 0, index: 1)
-        var pU32 = UInt32(p)
-        var ngU32 = UInt32(ng)
-        var stepOff = UInt32(it * convEntries)
-        encStepNorm.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 2)
-        encStepNorm.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
-        encStepNorm.setBytes(&stepOff, length: MemoryLayout<UInt32>.stride, index: 4)
-        encStepNorm.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
-        encStepNorm.endEncoding()
-
-        // ||w||² → convBuf[it*convEntries + ng .. it*convEntries + 2*ng)
-        let encWNorm = globalCB.makeComputeCommandEncoder()!
-        encWNorm.setComputePipelineState(norm2Ppl)
-        encWNorm.setBuffer(wBuffer, offset: 0, index: 0)
-        encWNorm.setBuffer(convBuf, offset: 0, index: 1)
-        var wOff = UInt32(it * convEntries + ng)
-        encWNorm.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 2)
-        encWNorm.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
-        encWNorm.setBytes(&wOff, length: MemoryLayout<UInt32>.stride, index: 4)
-        encWNorm.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
-        encWNorm.endEncoding()
-
-        // w -= d (GPU axpy)
-        let encAxpy = globalCB.makeComputeCommandEncoder()!
-        encAxpy.setComputePipelineState(axpyPpl)
-        encAxpy.setBuffer(wBuffer, offset: 0, index: 0)
-        encAxpy.setBuffer(dBuffer, offset: 0, index: 1)
-        var negOne: Float = -1.0
-        encAxpy.setBytes(&negOne, length: fs, index: 2)
-        encAxpy.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 3)
-        encAxpy.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
-        encAxpy.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+        globalIt = batchEnd
     }
-
-    globalCB.commit()
-    globalCB.waitUntilCompleted()
 
     // Post-process: find converged iteration from buffers
     let convBase = convBuf.contents().assumingMemoryBound(to: Float.self)
