@@ -732,11 +732,9 @@ public func skmetal_multinomial_irls_fit(
         // Clip Newton step norm to prevent blowup from near-singular Hessians
         let maxStep: Float = 10.0 * powf(Float(p * n_classes), 0.25)
         let stepNorm = cblas_snrm2(p32 * Int32(n_classes), dBase, 1)
-        var clipped: Int32 = 0
         if stepNorm > maxStep {
             let scale = maxStep / stepNorm
             cblas_sscal(p32 * Int32(n_classes), scale, dBase, 1)
-            clipped = 1
         }
 
         // Gradient is O(n) (no 1/n scaling), so scale tol by n
@@ -749,7 +747,7 @@ public func skmetal_multinomial_irls_fit(
         var stepSize: Float = 1.0
         var accepted = false
 
-        for bt in 0..<8 {
+        for _ in 0..<8 {
             // Restore W and apply step: W_new = W_old - stepSize * d
             memcpy(wPtr, wBack, wSize)
             cblas_saxpy(p32 * Int32(n_classes), -stepSize, dBase, 1, wPtr, 1)
