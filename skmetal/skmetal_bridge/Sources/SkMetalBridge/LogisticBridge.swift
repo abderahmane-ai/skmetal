@@ -709,21 +709,29 @@ public func skmetal_multinomial_irls_fit(
             let hPtr = hBase.advanced(by: hOff)
             let gPtr = gBase.advanced(by: gOff)
             var n_ = p32
+            // spptrf writes the Cholesky factor in-place, so back up the
+            // original Hessian before calling it — retries restore + add ridge.
+            let hBack = UnsafeMutablePointer<Float>.allocate(capacity: pPacked)
+            hBack.initialize(from: hPtr, count: pPacked)
             var ridge: Float = 0
-            for _ in 0..<12 {
+            while true {
                 spptrf_(&uplo, &n_, hPtr, &info)
                 if info == 0 { break }
                 ridge = ridge == 0 ? max(1e-6, alpha * 1e-3) : ridge * 10
                 if ridge > 1000 {
                     let msg = String(format: "iter=%d class=%d spptrf failed ridge=%.1e info=%d", nIter, c, ridge, info)
                     msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
+                    hBack.deallocate()
                     return 1
                 }
+                // Restore original Hessian, add ridge to diagonal
+                memcpy(hPtr, hBack, pPacked * fs)
                 for i in 0..<p {
                     let diagIdx = i * (2 * p - i + 1) / 2
                     hPtr[diagIdx] += ridge
                 }
             }
+            hBack.deallocate()
             spptrs_(&uplo, &n_, &nrhs_, hPtr, gPtr, &ldb_, &info)
             if info != 0 {
                 let msg = String(format: "iter=%d class=%d spptrs failed info=%d", nIter, c, info)
