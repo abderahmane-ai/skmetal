@@ -559,6 +559,7 @@ public func skmetal_multinomial_irls_fit(
         return 1
     }
 
+    let wBackBuffer = ctx.device.makeBuffer(length: wSize, options: .storageModeShared)
     guard let wBuffer = ctx.device.makeBuffer(length: wSize, options: .storageModeShared),
           let scoresBuffer = ctx.device.makeBuffer(length: scoresSize, options: .storageModeShared),
           let probBuffer = ctx.device.makeBuffer(length: scoresSize, options: .storageModeShared),
@@ -571,6 +572,7 @@ public func skmetal_multinomial_irls_fit(
     }
 
     memset(wBuffer.contents(), 0, wSize)
+    let wBack = wBackBuffer!.contents().assumingMemoryBound(to: Float.self)
 
     let rowBytesX = p * fs
     let rowBytesC = n_classes * fs
@@ -685,6 +687,18 @@ public func skmetal_multinomial_irls_fit(
         let hBase = hBuffer.contents().assumingMemoryBound(to: Float.self)
         let gBase = gradBatchBuffer.contents().assumingMemoryBound(to: Float.self)
         let dBase = dBuffer.contents().assumingMemoryBound(to: Float.self)
+        let wPtr = wBuffer.contents().assumingMemoryBound(to: Float.self)
+
+        // Save gradient norm BEFORE Cholesky solve overwrites gBase with step.
+        // Gradient is unscaled (O(n)), so multiply tol by n to match sklearn convention.
+        let gradNorm = cblas_snrm2(p32 * Int32(n_classes), gBase, 1)
+        let wNorm = cblas_snrm2(p32 * Int32(n_classes), wPtr, 1)
+
+        // Check for NaN/Inf in scores and bail early
+        let sFloats = scoresBuffer.contents().assumingMemoryBound(to: Float.self)
+        for i in 0..<(n * n_classes) {
+            if sFloats[i].isNaN || sFloats[i].isInfinite { return 2 }
+        }
 
         var uplo: CChar = 76
         var info: Int32 = 0
@@ -696,10 +710,14 @@ public func skmetal_multinomial_irls_fit(
             let gPtr = gBase.advanced(by: gOff)
             var n_ = p32
             spptrf_(&uplo, &n_, hPtr, &info)
-            guard info == 0 else { return 1 }
+            if info != 0 {
+                let msg = String(format: "iter=%d class=%d spptrf failed info=%d", nIter, c, info)
+                msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
+                return 1
+            }
             spptrs_(&uplo, &n_, &nrhs_, hPtr, gPtr, &ldb_, &info)
             if info != 0 {
-                let msg = String(format: "spotrf failed: class=%d info=%d", c, info)
+                let msg = String(format: "iter=%d class=%d spptrs failed info=%d", nIter, c, info)
                 msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
                 return 1
             }
@@ -711,12 +729,115 @@ public func skmetal_multinomial_irls_fit(
             }
         }
 
-        let gNorm = cblas_snrm2(p32 * Int32(n_classes), gBase, 1)
-        let wPtr = wBuffer.contents().assumingMemoryBound(to: Float.self)
-        let wNorm = cblas_snrm2(p32 * Int32(n_classes), wPtr, 1)
-        if gNorm < tol * max(1.0, wNorm) { break }
+        // Clip Newton step norm to prevent blowup from near-singular Hessians
+        let maxStep: Float = 10.0 * powf(Float(p * n_classes), 0.25)
+        let stepNorm = cblas_snrm2(p32 * Int32(n_classes), dBase, 1)
+        var clipped: Int32 = 0
+        if stepNorm > maxStep {
+            let scale = maxStep / stepNorm
+            cblas_sscal(p32 * Int32(n_classes), scale, dBase, 1)
+            clipped = 1
+        }
 
-        cblas_saxpy(p32 * Int32(n_classes), -1.0, dBase, 1, wPtr, 1)
+        // Gradient is O(n) (no 1/n scaling), so scale tol by n
+        if gradNorm < tol * Float(n) * max(1.0, wNorm) { break }
+
+        // ---- Backtracking line search ----
+        // Save current W to restore on backtrack
+        memcpy(wBack, wPtr, wSize)
+        let gradNormOld = gradNorm
+        var stepSize: Float = 1.0
+        var accepted = false
+
+        for bt in 0..<8 {
+            // Restore W and apply step: W_new = W_old - stepSize * d
+            memcpy(wPtr, wBack, wSize)
+            cblas_saxpy(p32 * Int32(n_classes), -stepSize, dBase, 1, wPtr, 1)
+
+            // Forward pass to compute gradient at W_new (no Hessian)
+            let cb2 = ctx.commandQueue.makeCommandBuffer()!
+
+            let gemm2 = MPSMatrixMultiplication(
+                device: ctx.device, transposeLeft: false, transposeRight: false,
+                resultRows: n, resultColumns: n_classes, interiorColumns: p,
+                alpha: 1.0, beta: 0.0)
+            gemm2.encode(commandBuffer: cb2, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixScores)
+
+            let softmax2 = MPSMatrixSoftMax(device: ctx.device)
+            softmax2.sourceRows = n
+            softmax2.sourceColumns = n_classes
+            softmax2.encode(commandBuffer: cb2, inputMatrix: matrixScores, resultMatrix: matrixProb)
+
+            if let pipeline = ctx.getPipeline(name: "softmax_residual", functionName: "softmax_residual") {
+                let enc = cb2.makeComputeCommandEncoder()!
+                enc.setComputePipelineState(pipeline)
+                enc.setBuffer(probBuffer, offset: 0, index: 0)
+                enc.setBuffer(yBuffer, offset: 0, index: 1)
+                enc.setBuffer(resBuffer, offset: 0, index: 2)
+                var nU = UInt32(n); var cU = UInt32(n_classes)
+                enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+                enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
+                let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+                let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (n + 15) / 16, depth: 1)
+                enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+                enc.endEncoding()
+            }
+
+            let gemmGrad2 = MPSMatrixMultiplication(
+                device: ctx.device, transposeLeft: true, transposeRight: false,
+                resultRows: p, resultColumns: n_classes, interiorColumns: n,
+                alpha: 1.0, beta: 0.0)
+            gemmGrad2.encode(commandBuffer: cb2, leftMatrix: matrixX, rightMatrix: matrixRes, resultMatrix: matrixG)
+
+            if let pipeline = ctx.getPipeline(name: "transpose_f32", functionName: "transpose_f32") {
+                let enc = cb2.makeComputeCommandEncoder()!
+                enc.setComputePipelineState(pipeline)
+                enc.setBuffer(gBuffer, offset: 0, index: 0)
+                enc.setBuffer(gradBatchBuffer, offset: 0, index: 1)
+                var rowsU = UInt32(p); var colsU = UInt32(n_classes)
+                enc.setBytes(&rowsU, length: MemoryLayout<UInt32>.stride, index: 2)
+                enc.setBytes(&colsU, length: MemoryLayout<UInt32>.stride, index: 3)
+                let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+                let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (p + 15) / 16, depth: 1)
+                enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+                enc.endEncoding()
+            }
+
+            if alpha != 0 {
+                if let pipeline = ctx.getPipeline(name: "multinomial_grad_l2", functionName: "multinomial_grad_l2") {
+                    let enc = cb2.makeComputeCommandEncoder()!
+                    enc.setComputePipelineState(pipeline)
+                    enc.setBuffer(gradBatchBuffer, offset: 0, index: 0)
+                    enc.setBuffer(wBuffer, offset: 0, index: 1)
+                    var a = alpha
+                    enc.setBytes(&a, length: fs, index: 2)
+                    var pU = UInt32(p); var cU = UInt32(n_classes)
+                    enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
+                    enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
+                    let tgSize = MTLSize(width: 16, height: 16, depth: 1)
+                    let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (p + 15) / 16, depth: 1)
+                    enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+                    enc.endEncoding()
+                }
+            }
+
+            cb2.commit()
+            cb2.waitUntilCompleted()
+
+            let gNew = gradBatchBuffer.contents().assumingMemoryBound(to: Float.self)
+            let gNormNew = cblas_snrm2(p32 * Int32(n_classes), gNew, 1)
+
+            if gNormNew < gradNormOld {
+                accepted = true
+                break
+            }
+            stepSize *= 0.5
+        }
+
+        if !accepted {
+            // All backtrack attempts failed: restore old W (no update this iteration)
+            memcpy(wPtr, wBack, wSize)
+        }
     }
 
     let wOut = W_out.assumingMemoryBound(to: Float.self)
