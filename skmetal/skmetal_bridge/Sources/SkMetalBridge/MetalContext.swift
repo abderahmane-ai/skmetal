@@ -49,7 +49,8 @@ final class MetalContext: @unchecked Sendable {
 
     private static func compileLibrary(device: MTLDevice) -> MTLLibrary {
         let metallibName = "SkMetalBridge"
-        // Find bundle relative to the dylib at runtime (works for pip-installed wheels)
+        // Find .metallib relative to the dylib at runtime (works for pip-installed wheels
+        // and local development — no reliance on build-time Bundle.module paths).
         var searchURLs: [URL] = []
         var info = Dl_info()
         if dladdr(#dsohandle, &info) != 0 {
@@ -58,11 +59,6 @@ final class MetalContext: @unchecked Sendable {
             searchURLs.append(bundleDir.appendingPathComponent(metallibName).appendingPathExtension("metallib"))
             searchURLs.append(bundleDir.appendingPathComponent("Kernels").appendingPathComponent(metallibName).appendingPathExtension("metallib"))
         }
-        // Fall back to SPM Bundle.module for local development
-        searchURLs.append(contentsOf: [
-            Bundle.module.url(forResource: metallibName, withExtension: "metallib"),
-            Bundle.module.url(forResource: metallibName, withExtension: "metallib", subdirectory: "Kernels"),
-        ].compactMap { $0 })
         for url in searchURLs {
             do {
                 return try device.makeLibrary(URL: url)
@@ -70,7 +66,6 @@ final class MetalContext: @unchecked Sendable {
         }
         fatalError("""
             SkMetalBridge.metallib not found. Run: cd skmetal/skmetal_bridge && ./compile_metal.sh
-            Searched Bundle.module and Kernels/ subdirectory.
             """)
     }
 
