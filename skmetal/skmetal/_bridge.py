@@ -283,11 +283,12 @@ def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
                 pass
 
     # Priority 2: MLX-native float32 GEMM (skips ctypes/dylib overhead)
-    if _use_mlx_gemm(A, B, trans_A, trans_B):
-        try:
-            return _gemm_mlx(A, B, alpha, beta, trans_A, trans_B)
-        except Exception:
-            pass
+    if not trans_A and not trans_B and alpha == 1.0 and beta == 0.0:
+        if _use_mlx_gemm(A, B, trans_A, trans_B):
+            try:
+                return _gemm_mlx(A, B, alpha, beta, trans_A, trans_B)
+            except Exception:
+                pass
 
     # Priority 3: Metal bridge float16 simdgroup GEMM
     if not trans_A and not trans_B and alpha == 1.0 and beta == 0.0:
