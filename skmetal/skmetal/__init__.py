@@ -1,34 +1,46 @@
 """
 skmetal: Apple Silicon GPU acceleration for scikit-learn.
 
-Usage::
+Drop-in GPU acceleration for scikit-learn estimators on Apple Silicon
+(M1-M5). Decorate any estimator-returning function with ``@accelerate``
+and ``fit()``/``predict()`` run on the Metal GPU — no code changes.
+
+Quick start::
 
     import skmetal
-    from sklearn.linear_model import LogisticRegression
+    from sklearn.linear_model import LinearRegression
 
-    # Check GPU availability first
-    if skmetal.METAL_AVAILABLE:
-        print(skmetal.device_info())
-
-    # Decorate an estimator to use GPU
     @skmetal.accelerate
     def model():
-        return LogisticRegression()
+        return LinearRegression()
 
-    clf = model()
-    clf.fit(X, y)
+    m = model()
+    m.fit(X_train, y_train)
+    m.predict(X_test)
+
+Installation::
+
+    pip install skmetal
+
+macOS 14+ and Apple Silicon required. No Xcode needed for the pip package.
 
 Configuration::
 
-    skmetal.set_device("cpu")          # force CPU fallback
-    skmetal.set_threshold(10_000)      # global min elements for GPU
-    skmetal.update_threshold("KMeans", 100_000, 50)  # per-estimator
-    skmetal.set_verbose(True)          # log dispatch decisions
-    skmetal.reset_thresholds()         # restore defaults
+    import skmetal
 
-On non-Apple-Silicon machines skmetal imports cleanly and all estimators
-transparently fall back to scikit-learn CPU implementations.
-Check ``skmetal.METAL_AVAILABLE`` to detect GPU support at runtime.
+    skmetal.set_device("cpu")             # force CPU fallback globally
+    skmetal.set_verbose(True)             # log dispatch decisions
+    skmetal.set_threshold(100_000)        # global min rows for GPU
+    skmetal.update_threshold("KMeans",    # per-estimator override
+                             min_rows=100_000, min_cols=50)
+    skmetal.reset_thresholds()            # restore defaults
+
+    config = skmetal.get_config()
+    print(config)
+
+Transparent fallback: On non-Apple-Silicon machines skmetal imports
+cleanly and all estimators fall back to scikit-learn CPU implementations.
+Check ``skmetal.METAL_AVAILABLE`` at runtime to detect GPU support.
 """
 
 from ._about import __version__, __version_info__
