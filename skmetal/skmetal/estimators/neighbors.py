@@ -6,8 +6,6 @@ from .._bridge import (
     knn_vote_classify_weighted, knn_vote_regress_weighted,
 )
 
-_METRIC_MAP = {"euclidean": 0, "manhattan": 1, "cosine": 2}
-
 
 class MetalKNeighborsMixin:
     _k_neighbors: int = 5

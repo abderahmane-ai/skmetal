@@ -42,7 +42,5 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
     SVR:                             ("skmetal.estimators.svm",          "MetalSVR"),
 }
 
-# Legacy aliases kept for any external code that imported GPU_ESTIMATORS or
-# PIPELINE_PATTERNS from this module. They are derived from GPU_REGISTRY so
-# they cannot drift.
+# Derived map: sklearn class → GPU class name. Computed from GPU_REGISTRY.
 GPU_ESTIMATORS: dict[type, str] = {cls: name for cls, (_, name) in GPU_REGISTRY.items()}

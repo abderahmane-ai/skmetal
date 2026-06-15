@@ -3,94 +3,6 @@ import Metal
 import MetalPerformanceShaders
 import Accelerate
 
-// MARK: - Fused Ridge: center X in-place + X^T X + X^T y in one command buffer
-
-@_cdecl("skmetal_ridge_fit")
-public func skmetal_ridge_fit(
-    X: UnsafeMutableRawPointer,
-    y: UnsafeRawPointer,
-    XTX: UnsafeMutableRawPointer,
-    XTy: UnsafeMutableRawPointer,
-    X_mean_out: UnsafeMutableRawPointer,
-    n: Int,
-    p: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let xSize = n * p * MemoryLayout<Float>.stride
-    let ySize = n * MemoryLayout<Float>.stride
-    let xtxSize = p * p * MemoryLayout<Float>.stride
-    let xtySize = p * MemoryLayout<Float>.stride
-    let meanSize = p * MemoryLayout<Float>.stride
-
-    guard let xBuffer = wrapOutput(X, length: xSize, device: ctx.device),
-          let yBuffer = wrapInput(y, length: ySize, device: ctx.device),
-          let xtxBuffer = wrapOutput(XTX, length: xtxSize, device: ctx.device),
-          let xtyBuffer = wrapOutput(XTy, length: xtySize, device: ctx.device),
-          let meanBuffer = wrapOutput(X_mean_out, length: meanSize, device: ctx.device) else {
-        return 1
-    }
-
-    let rowBytesX = p * MemoryLayout<Float>.stride
-    let rowBytesXTX = p * MemoryLayout<Float>.stride
-
-    let descX = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
-    let descXTX = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytesXTX, dataType: .float32)
-    let descY = MPSMatrixDescriptor(dimensions: n, columns: 1, rowBytes: MemoryLayout<Float>.stride, dataType: .float32)
-    let descXTy = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: MemoryLayout<Float>.stride, dataType: .float32)
-
-    let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
-    let matrixXTX = MPSMatrix(buffer: xtxBuffer, descriptor: descXTX)
-    let matrixY = MPSMatrix(buffer: yBuffer, descriptor: descY)
-    let matrixXTy = MPSMatrix(buffer: xtyBuffer, descriptor: descXTy)
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-
-    var nU: UInt32 = UInt32(n)
-    var pU: UInt32 = UInt32(p)
-    let computeEncoder = commandBuffer.makeComputeCommandEncoder()!
-    if let pipeline = ctx.getPipeline(name: "column_means", functionName: "column_means") {
-        computeEncoder.setComputePipelineState(pipeline)
-        computeEncoder.setBuffer(xBuffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(meanBuffer, offset: 0, index: 1)
-        computeEncoder.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
-        computeEncoder.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
-        let blockCols = 8
-        let tgCount = (p + blockCols - 1) / blockCols
-        let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-        computeEncoder.dispatchThreadgroups(MTLSize(width: tgCount, height: 1, depth: 1),
-                                            threadsPerThreadgroup: tgSize)
-    }
-    computeEncoder.endEncoding()
-
-    let centerEncoder = commandBuffer.makeComputeCommandEncoder()!
-    if let pipeline = ctx.getPipeline(name: "center_columns", functionName: "center_columns") {
-        centerEncoder.setComputePipelineState(pipeline)
-        centerEncoder.setBuffer(xBuffer, offset: 0, index: 0)
-        centerEncoder.setBuffer(meanBuffer, offset: 0, index: 1)
-        centerEncoder.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
-        centerEncoder.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
-        centerEncoder.dispatchThreads(MTLSize(width: n * p, height: 1, depth: 1),
-                                      threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-    }
-    centerEncoder.endEncoding()
-
-    let gemmXTX = MPSMatrixMultiplication(
-        device: ctx.device, transposeLeft: true, transposeRight: false,
-        resultRows: p, resultColumns: p, interiorColumns: n,
-        alpha: 1.0, beta: 0.0)
-    gemmXTX.encode(commandBuffer: commandBuffer, leftMatrix: matrixX, rightMatrix: matrixX, resultMatrix: matrixXTX)
-
-    let gemmXTy = MPSMatrixMultiplication(
-        device: ctx.device, transposeLeft: true, transposeRight: false,
-        resultRows: p, resultColumns: 1, interiorColumns: n,
-        alpha: 1.0, beta: 0.0)
-    gemmXTy.encode(commandBuffer: commandBuffer, leftMatrix: matrixX, rightMatrix: matrixY, resultMatrix: matrixXTy)
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
 // MARK: - Fused Ridge: center + XTX + XTy + L2 + Cholesky solve (one command buffer)
 
 @_cdecl("skmetal_ridge_fit_solve")
@@ -324,44 +236,6 @@ public func skmetal_linear_solve(
     return 0
 }
 
-// MARK: - Soft threshold (Lasso FISTA)
-
-@_cdecl("skmetal_soft_threshold")
-public func skmetal_soft_threshold(
-    w: UnsafeMutableRawPointer,
-    wTemp: UnsafeRawPointer,
-    threshold: Float,
-    n: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let byteSize = n * MemoryLayout<Float>.stride
-
-    guard let pipeline = ctx.getPipeline(name: "soft_threshold", functionName: "soft_threshold"),
-          let wBuffer = wrapOutput(w, length: byteSize, device: ctx.device),
-          let wtBuffer = wrapInput(wTemp, length: byteSize, device: ctx.device) else {
-        return 1
-    }
-
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
-
-    encoder.setComputePipelineState(pipeline)
-    encoder.setBuffer(wBuffer, offset: 0, index: 0)
-    encoder.setBuffer(wtBuffer, offset: 0, index: 1)
-    var thresh = threshold
-    encoder.setBytes(&thresh, length: MemoryLayout<Float>.stride, index: 2)
-    var nU = UInt32(n)
-    encoder.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-
-    let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-    encoder.dispatchThreadgroups(MTLSize(width: (n + 255) / 256, height: 1, depth: 1), threadsPerThreadgroup: tgSize)
-    encoder.endEncoding()
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-    return 0
-}
-
 // MARK: - GPU-resident FISTA (Lasso/ElasticNet)
 
 @_cdecl("skmetal_fista_fit")
@@ -414,8 +288,8 @@ public func skmetal_fista_fit(
           let subPpl = ctx.getPipeline(name: "subtract", functionName: "subtract"),
           let stPpl = ctx.getPipeline(name: "soft_threshold", functionName: "soft_threshold"),
           let scalePpl = ctx.getPipeline(name: "scale_f32", functionName: "scale_f32"),
-          let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum"),
-          let nsPpl = ctx.getPipeline(name: "norm_sq", functionName: "norm_sq") else {
+          let _ = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum"),
+          let _ = ctx.getPipeline(name: "norm_sq", functionName: "norm_sq") else {
         return 1
     }
 
