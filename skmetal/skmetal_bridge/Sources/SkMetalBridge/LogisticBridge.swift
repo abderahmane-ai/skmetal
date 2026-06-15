@@ -709,11 +709,20 @@ public func skmetal_multinomial_irls_fit(
             let hPtr = hBase.advanced(by: hOff)
             let gPtr = gBase.advanced(by: gOff)
             var n_ = p32
-            spptrf_(&uplo, &n_, hPtr, &info)
-            if info != 0 {
-                let msg = String(format: "iter=%d class=%d spptrf failed info=%d", nIter, c, info)
-                msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
-                return 1
+            var ridge: Float = 0
+            for _ in 0..<12 {
+                spptrf_(&uplo, &n_, hPtr, &info)
+                if info == 0 { break }
+                ridge = ridge == 0 ? max(1e-6, alpha * 1e-3) : ridge * 10
+                if ridge > 1000 {
+                    let msg = String(format: "iter=%d class=%d spptrf failed ridge=%.1e info=%d", nIter, c, ridge, info)
+                    msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
+                    return 1
+                }
+                for i in 0..<p {
+                    let diagIdx = i * (2 * p - i + 1) / 2
+                    hPtr[diagIdx] += ridge
+                }
             }
             spptrs_(&uplo, &n_, &nrhs_, hPtr, gPtr, &ldb_, &info)
             if info != 0 {
