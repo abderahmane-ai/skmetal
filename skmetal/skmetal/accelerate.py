@@ -31,29 +31,7 @@ def accelerate(obj=None):
     """
     if obj is None:
         return _Accelerator()
-
-    if isinstance(obj, Pipeline):
-        return _wrap_pipeline(obj)
-
-    if isinstance(obj, type):
-        return _Accelerator._wrap_class(obj)
-
-    if hasattr(obj, "fit"):
-        return _wrap_estimator(obj)
-
-    if callable(obj):
-        @wraps(obj)
-        def wrapper(*args, **kwargs):
-            result = obj(*args, **kwargs)
-            if isinstance(result, Pipeline):
-                return _wrap_pipeline(result)
-            if hasattr(result, "fit"):
-                return _wrap_estimator(result)
-            return result
-        return wrapper
-
-    warnings.warn(f"accelerate: {type(obj).__name__} is not a recognized estimator or pipeline.")
-    return obj
+    return _Accelerator()(obj)
 
 
 class _Accelerator:

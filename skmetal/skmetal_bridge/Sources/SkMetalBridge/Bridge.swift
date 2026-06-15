@@ -25,12 +25,16 @@ public func skmetal_init() -> Int32 {
 @_cdecl("skmetal_device_info")
 public func skmetal_device_info(
     name: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
-    maxThreads: UnsafeMutablePointer<Int>?
+    maxThreads: UnsafeMutablePointer<Int>?,
+    hasUnifiedMemory: UnsafeMutablePointer<UInt8>?,
+    recommendedWorkingSetSize: UnsafeMutablePointer<UInt64>?
 ) -> Int32 {
     let ctx = MetalContext.shared
-    let nameStr = ctx.device.name
-    name.pointee = strdup(nameStr)
-    maxThreads?.pointee = ctx.device.maxThreadsPerThreadgroup.width
+    let dev = ctx.device
+    name.pointee = strdup(dev.name)
+    maxThreads?.pointee = dev.maxThreadsPerThreadgroup.width
+    hasUnifiedMemory?.pointee = dev.hasUnifiedMemory ? 1 : 0
+    recommendedWorkingSetSize?.pointee = dev.recommendedMaxWorkingSetSize
     return 0
 }
 
@@ -72,6 +76,7 @@ public func skmetal_warmup() -> Int32 {
         ("knn_select_tile_topk_manhattan", "knn_select_tile_topk_manhattan"),
         ("knn_select_tile_topk_cosine", "knn_select_tile_topk_cosine"),
         ("knn_merge_topk", "knn_merge_topk"),
+        ("knn_negate_distances", "knn_negate_distances"),
         ("knn_vote_classify", "knn_vote_classify"),
         ("knn_vote_regress", "knn_vote_regress"),
         ("knn_vote_classify_weighted", "knn_vote_classify_weighted"),
@@ -93,6 +98,8 @@ public func skmetal_warmup() -> Int32 {
         ("compute_linear_irls", "compute_linear_irls"),
         ("compute_error_scale", "compute_error_scale"),
         ("l2_reg_irls", "l2_reg_irls"),
+        ("sigmoid_grad_loss_binary", "sigmoid_grad_loss_binary"),
+        ("log_loss_binary", "log_loss_binary"),
         ("multinomial_grad_l2", "multinomial_grad_l2"),
         ("rbf_apply", "rbf_apply"),
         ("fill_f32", "fill_f32"),

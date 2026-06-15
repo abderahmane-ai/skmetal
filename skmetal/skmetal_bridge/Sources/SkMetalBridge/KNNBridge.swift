@@ -249,22 +249,18 @@ public func skmetal_knn_tiled_kneighbors(
         enc2.endEncoding()
     }
 
-    guard let gValsBuffer = ctx.device.makeBuffer(length: kSize, options: .storageModeShared),
-          let gIdxsBuffer = ctx.device.makeBuffer(length: kIdxSize, options: .storageModeShared) else {
-        return 1
-    }
-    let gValsPtr = gValsBuffer.contents().assumingMemoryBound(to: Float.self)
-    for i in 0..<(nQ * k) { gValsPtr[i] = .infinity }
-    memset(gIdxsBuffer.contents(), 0, kIdxSize)
+    let maxTileN = min(tileSize, nT)
+    let dotSize = nQ * maxTileN * fs
+    let tileValsSize = nQ * k * fs
+    let tileIdxsSize = nQ * k * isize
+
+    let dotBuffer = (!isManhattan) ? ctx.device.makeBuffer(length: dotSize, options: .storageModeShared) : nil
 
     let selectName: String
     let selectFunc: String
     if isManhattan {
         selectName = "knn_select_tile_topk_manhattan"
         selectFunc = "knn_select_tile_topk_manhattan"
-    } else if isCosine {
-        selectName = "knn_select_tile_topk_cosine"
-        selectFunc = "knn_select_tile_topk_cosine"
     } else {
         selectName = "knn_select_tile_topk"
         selectFunc = "knn_select_tile_topk"
@@ -274,29 +270,39 @@ public func skmetal_knn_tiled_kneighbors(
         return 1
     }
 
-    let maxTileN = min(tileSize, nT)
-    let dotSize = nQ * maxTileN * fs
-    let tileValsSize = nQ * k * fs
-    let tileIdxsSize = nQ * k * isize
-
-    let dotBuffer = (!isManhattan) ? ctx.device.makeBuffer(length: dotSize, options: .storageModeShared) : nil
-    guard let tValsBuffer = ctx.device.makeBuffer(length: tileValsSize, options: .storageModeShared),
-          let tIdxsBuffer = ctx.device.makeBuffer(length: tileIdxsSize, options: .storageModeShared) else {
-        return 1
-    }
-
-    let tempValsBuffer = ctx.device.makeBuffer(length: tileValsSize, options: .storageModeShared)
-    let tempIdxsBuffer = ctx.device.makeBuffer(length: tileIdxsSize, options: .storageModeShared)
-
     let descQ = MPSMatrixDescriptor(dimensions: nQ, columns: d,
                                      rowBytes: d * fs, dataType: .float32)
     let matrixQ = MPSMatrix(buffer: xQueryBuffer, descriptor: descQ)
+
+    let useMPSFindTopK = (k <= 16 && !isManhattan)  // MPSMatrixFindTopK limited to k ≤ 16
+    let negDistBuffer = useMPSFindTopK ? ctx.device.makeBuffer(length: dotSize, options: .storageModeShared) : nil
+
+    let numTiles = (nT + tileSize - 1) / tileSize
+
+    // For MPS path: one big buffer per tile-indexed slot (no overwrite)
+    let allTValsBuffer = useMPSFindTopK ? ctx.device.makeBuffer(length: numTiles * tileValsSize, options: .storageModeShared) : nil
+    let allTIdxsBuffer = useMPSFindTopK ? ctx.device.makeBuffer(length: numTiles * tileIdxsSize, options: .storageModeShared) : nil
+
+    // For old path: per-tile + global + temp
+    guard let tValsBuffer = ctx.device.makeBuffer(length: tileValsSize, options: .storageModeShared),
+          let tIdxsBuffer = ctx.device.makeBuffer(length: tileIdxsSize, options: .storageModeShared),
+          let gValsBuffer = ctx.device.makeBuffer(length: kSize, options: .storageModeShared),
+          let gIdxsBuffer = ctx.device.makeBuffer(length: kIdxSize, options: .storageModeShared) else {
+        return 1
+    }
+    let gValsPtr = gValsBuffer.contents().assumingMemoryBound(to: Float.self)
+    for i in 0..<(nQ * k) { gValsPtr[i] = .infinity }
+    memset(gIdxsBuffer.contents(), 0, kIdxSize)
+
+    let tempValsBuffer = ctx.device.makeBuffer(length: tileValsSize, options: .storageModeShared)
+    let tempIdxsBuffer = ctx.device.makeBuffer(length: tileIdxsSize, options: .storageModeShared)
 
     let batchSize = min(32, max(1, nQ))
     let tgBatch = MTLSize(width: batchSize, height: 1, depth: 1)
     let gridBatch = MTLSize(width: (nQ + batchSize - 1) / batchSize, height: 1, depth: 1)
 
     var tileStart = 0
+    var tileIdx = 0
     while tileStart < nT {
         let tileEnd = min(tileStart + tileSize, nT)
         let tileN = tileEnd - tileStart
@@ -315,6 +321,71 @@ public func skmetal_knn_tiled_kneighbors(
             encSel.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
             encSel.dispatchThreadgroups(gridBatch, threadsPerThreadgroup: tgBatch)
             encSel.endEncoding()
+        } else if useMPSFindTopK {
+            guard let rq = rqBuffer, let rt = rtBuffer, let db = dotBuffer,
+                  let ndb = negDistBuffer,
+                  let negPipeline = ctx.getPipeline(name: "knn_negate_distances",
+                                                    functionName: "knn_negate_distances") else { return 1 }
+
+            let trainSlicePtr = xTrainBuffer.contents().advanced(by: tileStart * d * fs)
+            guard let trainSliceBuffer = ctx.device.makeBuffer(
+                bytesNoCopy: trainSlicePtr,
+                length: tileN * d * fs,
+                options: .storageModeShared,
+                deallocator: nil) else { return 1 }
+            let rtSlicePtr = rt.contents().advanced(by: tileStart * fs)
+            guard let rtSliceBuffer = ctx.device.makeBuffer(
+                bytesNoCopy: rtSlicePtr,
+                length: tileN * fs,
+                options: .storageModeShared,
+                deallocator: nil) else { return 1 }
+
+            let descTSlice = MPSMatrixDescriptor(dimensions: tileN, columns: d,
+                                                 rowBytes: d * fs, dataType: .float32)
+            let descDot = MPSMatrixDescriptor(dimensions: nQ, columns: tileN,
+                                              rowBytes: tileN * fs, dataType: .float32)
+            let matrixTSlice = MPSMatrix(buffer: trainSliceBuffer, descriptor: descTSlice)
+            let matrixDot = MPSMatrix(buffer: db, descriptor: descDot)
+
+            // 1. GEMM: dot = XQ @ XT[tile].T
+            let gemm = MPSMatrixMultiplication(
+                device: ctx.device, transposeLeft: false, transposeRight: true,
+                resultRows: nQ, resultColumns: tileN, interiorColumns: d,
+                alpha: 1.0, beta: 0.0)
+            gemm.encode(commandBuffer: cb, leftMatrix: matrixQ, rightMatrix: matrixTSlice,
+                        resultMatrix: matrixDot)
+
+            // 2. Negate distances into separate buffer (largest value = closest)
+            let encNeg = cb.makeComputeCommandEncoder()!
+            encNeg.setComputePipelineState(negPipeline)
+            encNeg.setBuffer(db, offset: 0, index: 0)
+            encNeg.setBuffer(rq, offset: 0, index: 1)
+            encNeg.setBuffer(rtSliceBuffer, offset: 0, index: 2)
+            encNeg.setBuffer(ndb, offset: 0, index: 3)
+            var nqU = UInt32(nQ); var tnU = UInt32(tileN); var csU = UInt32(isCosine ? 1 : 0)
+            encNeg.setBytes(&nqU, length: MemoryLayout<UInt32>.stride, index: 4)
+            encNeg.setBytes(&tnU, length: MemoryLayout<UInt32>.stride, index: 5)
+            encNeg.setBytes(&csU, length: MemoryLayout<UInt32>.stride, index: 6)
+            encNeg.dispatchThreads(MTLSize(width: nQ * tileN, height: 1, depth: 1),
+                                   threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            encNeg.endEncoding()
+
+            // 3. MPSMatrixFindTopK per tile (finds k largest values per row)
+            guard let atvb = allTValsBuffer, let atib = allTIdxsBuffer else { return 1 }
+            let descND = MPSMatrixDescriptor(dimensions: nQ, columns: tileN,
+                                             rowBytes: tileN * fs, dataType: .float32)
+            let descTV = MPSMatrixDescriptor(dimensions: nQ, columns: k,
+                                             rowBytes: k * fs, dataType: .float32)
+            let descTI = MPSMatrixDescriptor(dimensions: nQ, columns: k,
+                                             rowBytes: k * MemoryLayout<UInt32>.stride, dataType: .uInt32)
+            let matrixND = MPSMatrix(buffer: ndb, descriptor: descND)
+            let matrixTV = MPSMatrix(buffer: atvb, offset: tileIdx * tileValsSize, descriptor: descTV)
+            let matrixTI = MPSMatrix(buffer: atib, offset: tileIdx * tileIdxsSize, descriptor: descTI)
+
+            let findTopK = MPSMatrixFindTopK(device: ctx.device, numberOfTopKValues: k)
+            findTopK.indexOffset = tileStart
+            findTopK.encode(commandBuffer: cb, inputMatrix: matrixND,
+                            resultIndexMatrix: matrixTI, resultValueMatrix: matrixTV)
         } else {
             guard let rq = rqBuffer, let rt = rtBuffer, let db = dotBuffer else { return 1 }
 
@@ -338,6 +409,7 @@ public func skmetal_knn_tiled_kneighbors(
             let matrixTSlice = MPSMatrix(buffer: trainSliceBuffer, descriptor: descTSlice)
             let matrixDot = MPSMatrix(buffer: db, descriptor: descDot)
 
+            // 1. GEMM: dot = XQ @ XT[tile].T
             let gemm = MPSMatrixMultiplication(
                 device: ctx.device, transposeLeft: false, transposeRight: true,
                 resultRows: nQ, resultColumns: tileN, interiorColumns: d,
@@ -345,6 +417,7 @@ public func skmetal_knn_tiled_kneighbors(
             gemm.encode(commandBuffer: cb, leftMatrix: matrixQ, rightMatrix: matrixTSlice,
                         resultMatrix: matrixDot)
 
+            // 2. Fused distance + insertion sort top-k (existing custom kernel)
             let encSel = cb.makeComputeCommandEncoder()!
             encSel.setComputePipelineState(selectPipeline)
             encSel.setBuffer(db, offset: 0, index: 0)
@@ -360,29 +433,74 @@ public func skmetal_knn_tiled_kneighbors(
             encSel.endEncoding()
         }
 
-        let encMerge = cb.makeComputeCommandEncoder()!
-        encMerge.setComputePipelineState(mergePipeline)
-        encMerge.setBuffer(tValsBuffer, offset: 0, index: 0)
-        encMerge.setBuffer(tIdxsBuffer, offset: 0, index: 1)
-        encMerge.setBuffer(gValsBuffer, offset: 0, index: 2)
-        encMerge.setBuffer(gIdxsBuffer, offset: 0, index: 3)
-        if let tvb = tempValsBuffer { encMerge.setBuffer(tvb, offset: 0, index: 4) }
-        if let tib = tempIdxsBuffer { encMerge.setBuffer(tib, offset: 0, index: 5) }
-        var nqU = UInt32(nQ); var kU = UInt32(k)
-        encMerge.setBytes(&nqU, length: MemoryLayout<UInt32>.stride, index: 6)
-        encMerge.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
-        var tsU = UInt32(tileStart)
-        encMerge.setBytes(&tsU, length: MemoryLayout<UInt32>.stride, index: 8)
-        encMerge.dispatchThreadgroups(gridBatch, threadsPerThreadgroup: tgBatch)
-        encMerge.endEncoding()
+        if !useMPSFindTopK {
+            // GPU merge of tile results into global
+            let encMerge = cb.makeComputeCommandEncoder()!
+            encMerge.setComputePipelineState(mergePipeline)
+            encMerge.setBuffer(tValsBuffer, offset: 0, index: 0)
+            encMerge.setBuffer(tIdxsBuffer, offset: 0, index: 1)
+            encMerge.setBuffer(gValsBuffer, offset: 0, index: 2)
+            encMerge.setBuffer(gIdxsBuffer, offset: 0, index: 3)
+            if let tvb = tempValsBuffer { encMerge.setBuffer(tvb, offset: 0, index: 4) }
+            if let tib = tempIdxsBuffer { encMerge.setBuffer(tib, offset: 0, index: 5) }
+            var nqU = UInt32(nQ); var kU = UInt32(k)
+            encMerge.setBytes(&nqU, length: MemoryLayout<UInt32>.stride, index: 6)
+            encMerge.setBytes(&kU, length: MemoryLayout<UInt32>.stride, index: 7)
+            var tsU = UInt32(tileStart)
+            encMerge.setBytes(&tsU, length: MemoryLayout<UInt32>.stride, index: 8)
+            encMerge.dispatchThreadgroups(gridBatch, threadsPerThreadgroup: tgBatch)
+            encMerge.endEncoding()
+        }
 
         tileStart += tileSize
+        tileIdx += 1
     }
 
     cb.commit()
     cb.waitUntilCompleted()
 
-    memcpy(outValsBuffer.contents(), gValsBuffer.contents(), kSize)
-    memcpy(outIdxsBuffer.contents(), gIdxsBuffer.contents(), kIdxSize)
+    if useMPSFindTopK {
+        // CPU merge of tile results (MPSMatrixFindTopK can't accumulate across tiles)
+        guard let atvb = allTValsBuffer, let atib = allTIdxsBuffer else { return 1 }
+        let outValsPtr = outValsBuffer.contents().assumingMemoryBound(to: Float.self)
+        let outIdxsPtr = outIdxsBuffer.contents().assumingMemoryBound(to: Int32.self)
+        let tileValsPtr = atvb.contents().assumingMemoryBound(to: Float.self)
+        let tileIdxsPtr = atib.contents().assumingMemoryBound(to: UInt32.self)
+
+        for row in 0..<nQ {
+            var gv = [Float](repeating: .infinity, count: k)
+            var gi = [Int32](repeating: 0, count: k)
+
+            for t in 0..<numTiles {
+                let tv = tileValsPtr + t * nQ * k + row * k
+                let ti = tileIdxsPtr + t * nQ * k + row * k
+
+                var mv = [Float](repeating: 0, count: k)
+                var mi = [Int32](repeating: 0, count: k)
+                var a = 0; var b = 0
+                for s in 0..<k {
+                    if a < k && (b >= k || tv[a] < gv[b]) {
+                        mv[s] = tv[a]; mi[s] = Int32(bitPattern: ti[a]); a += 1
+                    } else {
+                        mv[s] = gv[b]; mi[s] = gi[b]; b += 1
+                    }
+                }
+                gv = mv; gi = mi
+            }
+
+            for s in 0..<k {
+                if isCosine {
+                    outValsPtr[row * k + s] = 1.0 - gv[s]
+                } else {
+                    outValsPtr[row * k + s] = -gv[s]
+                }
+                outIdxsPtr[row * k + s] = gi[s]
+            }
+        }
+    } else {
+        // GPU path already merged into gValsBuffer/gIdxsBuffer → copy to output
+        memcpy(outValsBuffer.contents(), gValsBuffer.contents(), kSize)
+        memcpy(outIdxsBuffer.contents(), gIdxsBuffer.contents(), kIdxSize)
+    }
     return 0
 }

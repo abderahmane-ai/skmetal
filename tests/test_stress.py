@@ -10,10 +10,7 @@ from sklearn.datasets import make_regression, make_classification
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 from skmetal import _bridge
-from skmetal._bridge import (
-    gemm, sigmoid, subtract, axpy, norm_sq, reduce_sum,
-    row_norm_sq, transpose_f32, soft_threshold,
-)
+from skmetal._bridge import gemm
 
 pytestmark = [
     pytest.mark.skipif(
@@ -40,31 +37,6 @@ class TestDtypeRejection:
         with pytest.raises(TypeError, match="must be float32"):
             gemm(A, B)
 
-    def test_reduce_sum_f64_rejected(self):
-        X = np.ones(5, dtype=np.float64)
-        with pytest.raises(TypeError, match="must be float32"):
-            reduce_sum(X)
-
-    def test_sigmoid_no_validation(self):
-        # sigmoid does not validate dtype — passes raw pointer to GPU.
-        # The GPU kernel reads whatever bit pattern; for int32 arrays this
-        # produces garbage silently. Estimator-level _validate_data converts.
-        x_f64 = np.array([0.0, 1.0], dtype=np.float64)
-        out = np.empty(2, dtype=np.float32)
-        sigmoid(x_f64, out)  # does NOT raise (no validation)
-
-    def test_transpose_f32_rejects_f64(self):
-        x = np.ones((2, 3), dtype=np.float64)
-        out = np.empty((3, 2), dtype=np.float64)
-        with pytest.raises(TypeError, match="must be float32"):
-            transpose_f32(x, out)
-
-    def test_transpose_f32_rejects_mixed(self):
-        x = np.ones((2, 3), dtype=np.float32)
-        out = np.empty((3, 2), dtype=np.float64)
-        with pytest.raises(TypeError, match="must be float32"):
-            transpose_f32(x, out)
-
 
 # ===========================================================================
 # Contiguity rejection
@@ -76,13 +48,6 @@ class TestContiguityRejection:
         B = np.ones((3, 2), dtype=np.float32)
         with pytest.raises(ValueError, match="C-contiguous"):
             gemm(A, B)
-
-    def test_reduce_sum_non_contiguous(self):
-        X = np.ones((2, 3), dtype=np.float32, order="F")
-        if X.flags["C_CONTIGUOUS"]:
-            pytest.skip("Fortran-order array happened to be C-contiguous")
-        with pytest.raises(TypeError, match="C-contiguous"):
-            reduce_sum(X)
 
 
 # ===========================================================================
@@ -96,62 +61,8 @@ class TestShapeValidation:
         with pytest.raises(ValueError, match="Incompatible dimensions"):
             gemm(A, B)
 
-    def test_subtract_different_sizes(self):
-        a = np.ones(3, dtype=np.float32)
-        b = np.ones(5, dtype=np.float32)
-        out = np.empty(3, dtype=np.float32)
-        # No validation in bridge — GPU kernel reads wrong amount of memory
-        # This silently produces wrong results. Documenting the gap.
-        subtract(a, b, out)
-
-    def test_axpy_different_sizes(self):
-        a = np.ones(3, dtype=np.float32)
-        b = np.ones(5, dtype=np.float32)
-        # Same gap as subtract — no shape validation
-        axpy(a, b, 1.0)
 
 
-# ===========================================================================
-# Known-value / hand-computable edge cases
-# ===========================================================================
-
-class TestElementWiseEdgeCases:
-    def test_sigmoid_large_positive(self):
-        x = np.array([100.0, 200.0, 500.0], dtype=np.float32)
-        out = np.empty(3, dtype=np.float32)
-        sigmoid(x, out)
-        assert np.all(out == 1.0)
-
-    def test_sigmoid_large_negative(self):
-        x = np.array([-100.0, -200.0, -500.0], dtype=np.float32)
-        out = np.empty(3, dtype=np.float32)
-        sigmoid(x, out)
-        assert np.all(out == 0.0)
-
-    def test_axpy_alpha_large(self):
-        a = np.ones(3, dtype=np.float32)
-        b = np.full(3, 1e-7, dtype=np.float32)
-        axpy(a, b, 1e7)
-        np.testing.assert_allclose(a, [2.0, 2.0, 2.0], rtol=1e-5)
-
-    def test_norm_sq_large_values(self):
-        x = np.array([1e10, -1e10], dtype=np.float32)
-        out = np.empty(2, dtype=np.float32)
-        norm_sq(x, out)
-        # Both should be 1e20, but f32 may overflow
-        assert np.all(np.isfinite(out)) or np.all(np.isinf(out))
-
-    def test_soft_threshold_negative(self):
-        w = np.empty(3, dtype=np.float32)
-        w_temp = np.array([-5.0, 5.0, -3.0], dtype=np.float32)
-        soft_threshold(w, w_temp, 2.0)
-        np.testing.assert_allclose(w, [-3.0, 3.0, -1.0], rtol=1e-5)
-
-    def test_row_norm_sq_single_row(self):
-        X = np.array([[3.0, 4.0]], dtype=np.float32)
-        norms = np.empty(1, dtype=np.float32)
-        row_norm_sq(X, norms)
-        assert norms[0] == pytest.approx(25.0, abs=1e-5)
 
 
 # ===========================================================================

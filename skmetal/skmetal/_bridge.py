@@ -33,13 +33,6 @@ def _find_library() -> str:
     )
 
 
-def _unavailable(*args, **kwargs):
-    raise RuntimeError(
-        "skmetal GPU acceleration requires Apple Silicon (M1+) running macOS 14+. "
-        "This device/OS is not supported. All operations fall back to scikit-learn CPU."
-    )
-
-
 try:
     if not _is_apple_silicon():
         raise RuntimeError("Not Apple Silicon — skipping dylib load.")
@@ -56,7 +49,7 @@ except Exception as _metal_err:  # noqa: BLE001
     METAL_AVAILABLE = False
 
 
-def _bridge_call(c_func, *args):
+def _bridge_call(c_func, *args, context=""):
     """Call a C bridge function with auto-conversion of Python/numpy args.
 
     numpy arrays → .ctypes.data  |  int → c_size_t  |  float → c_float
@@ -77,35 +70,24 @@ def _bridge_call(c_func, *args):
             c_args.append(a)
     err = c_func(*c_args)
     if err != 0:
-        raise RuntimeError(f"{c_func.__name__} failed with code {err}")
+        msg = f"{c_func.__name__} failed with code {err}"
+        if context:
+            msg += f" ({context})"
+        raise RuntimeError(msg)
 
 
 # (c_name, argtypes...)
 _BRIDGE_REGISTRY = [
-    ("skmetal_reduce_sum", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
-    ("skmetal_reduce_mean_var", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_float),
     ("skmetal_pairwise_distance", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_sigmoid", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
-    ("skmetal_subtract", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
-    ("skmetal_axpy", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t),
-    ("skmetal_norm_sq", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
-    ("skmetal_row_norm_sq", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_distance_correct", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_argmin_rows", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_scaler_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_column_minmax", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_irls_weight", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
-    ("skmetal_scale_rows", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_center_columns", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_kmeans_assign", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_kmeans_combine_normalize", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_kmeans_batch_fused", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_compute_mindists", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_compute_mindists", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_gemm", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.c_float, ctypes.c_int, ctypes.c_int),
-    ("skmetal_ridge_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_fista_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.POINTER(ctypes.c_int32)),
     ("skmetal_column_transform", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_transpose_f32", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_sv_init", ctypes.c_void_p, ctypes.c_size_t),
     ("skmetal_sv_hook", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_sv_shortcut", ctypes.c_void_p, ctypes.c_size_t),
@@ -114,18 +96,16 @@ _BRIDGE_REGISTRY = [
     ("skmetal_knn_vote_classify_weighted", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_knn_vote_regress_weighted", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_knn_tiled_kneighbors", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_int32),
-    ("skmetal_soft_threshold", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t),
-    ("skmetal_row_max", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_row_sum", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_softmax_exp", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_softmax_normalize_residual", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_negate", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
     ("skmetal_rbf_kernel_square", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_rbf_kernel_cross", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_tree_predict_all", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_svc_predict_binary", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float),
     ("skmetal_logreg_irls_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
+    ("skmetal_logreg_lbfgs_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
     ("skmetal_multinomial_irls_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
+    ("skmetal_ridge_fit_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_ridge_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t),
+    ("skmetal_linear_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
 ]
 
 if METAL_AVAILABLE:
@@ -135,7 +115,8 @@ if METAL_AVAILABLE:
         _func.restype = ctypes.c_int
 
     # device_info, init, warmup have unique argtypes not in registry
-    _lib.skmetal_device_info.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_size_t)]
+    _lib.skmetal_device_info.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_size_t),
+                                         ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint64)]
     _lib.skmetal_device_info.restype = ctypes.c_int
     _lib.skmetal_init.argtypes = []
     _lib.skmetal_init.restype = ctypes.c_int
@@ -168,25 +149,6 @@ def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
     return C
 
 
-def reduce_sum(X: np.ndarray) -> float:
-    """Sum of all elements in X."""
-    if X.dtype != np.float32 or not X.flags["C_CONTIGUOUS"]:
-        raise TypeError("X must be float32 and C-contiguous")
-    out = np.zeros((), dtype=np.float32)
-    _bridge_call(_lib.skmetal_reduce_sum, X, out, X.size)
-    return float(out)
-
-
-def reduce_mean_var(X: np.ndarray) -> tuple[float, float]:
-    """Mean and variance via Welford's algorithm."""
-    if X.dtype != np.float32 or not X.flags["C_CONTIGUOUS"]:
-        raise TypeError("X must be float32 and C-contiguous")
-    mean_out = np.zeros((), dtype=np.float32)
-    var_out = np.zeros((), dtype=np.float32)
-    _bridge_call(_lib.skmetal_reduce_mean_var, X, mean_out, var_out, X.size, 1e-10)
-    return float(mean_out), float(var_out)
-
-
 def pairwise_distance(X: np.ndarray) -> np.ndarray:
     """Squared Euclidean pairwise distance matrix."""
     if X.dtype != np.float32 or not X.flags["C_CONTIGUOUS"]:
@@ -203,41 +165,6 @@ def kmeans_assign(X: np.ndarray, centroids: np.ndarray, assignments: np.ndarray,
     _bridge_call(_lib.skmetal_kmeans_assign, X, centroids, assignments, n, d, k)
 
 
-def sigmoid(input: np.ndarray, output: np.ndarray) -> None:
-    """GPU sigmoid: 1 / (1 + exp(-x))."""
-    _bridge_call(_lib.skmetal_sigmoid, input, output, input.size)
-
-
-def subtract(a: np.ndarray, b: np.ndarray, output: np.ndarray) -> None:
-    """Element-wise: output = a - b."""
-    _bridge_call(_lib.skmetal_subtract, a, b, output, a.size)
-
-
-def axpy(a: np.ndarray, b: np.ndarray, alpha: float) -> None:
-    """In-place: a += alpha * b."""
-    _bridge_call(_lib.skmetal_axpy, a, b, alpha, a.size)
-
-
-def norm_sq(input: np.ndarray, output: np.ndarray) -> None:
-    """Element-wise: output[i] = input[i]^2."""
-    _bridge_call(_lib.skmetal_norm_sq, input, output, input.size)
-
-
-def row_norm_sq(X: np.ndarray, norms: np.ndarray) -> None:
-    """Row-wise squared norm: norms[i] = sum_j X[i][j]^2."""
-    _bridge_call(_lib.skmetal_row_norm_sq, X, norms, X.shape[0], X.shape[1])
-
-
-def distance_correct(D: np.ndarray, X_norm: np.ndarray, C_norm: np.ndarray) -> None:
-    """Expansion trick: D = X_norm² + C_norm² - 2*D (in-place)."""
-    _bridge_call(_lib.skmetal_distance_correct, D, X_norm, C_norm, D.shape[0], D.shape[1])
-
-
-def argmin_rows(matrix: np.ndarray, indices: np.ndarray) -> None:
-    """Argmin per row (column index of minimum)."""
-    _bridge_call(_lib.skmetal_argmin_rows, matrix, indices, matrix.shape[0], matrix.shape[1])
-
-
 def scaler_fit(X: np.ndarray, mean_out: np.ndarray, var_out: np.ndarray) -> None:
     """Fused StandardScaler: mean + variance for all columns."""
     _bridge_call(_lib.skmetal_scaler_fit, X, mean_out, var_out, X.shape[0], X.shape[1])
@@ -246,28 +173,6 @@ def scaler_fit(X: np.ndarray, mean_out: np.ndarray, var_out: np.ndarray) -> None
 def column_minmax(X: np.ndarray, min_out: np.ndarray, max_out: np.ndarray) -> None:
     """Fused per-column min + max."""
     _bridge_call(_lib.skmetal_column_minmax, X, min_out, max_out, X.shape[0], X.shape[1])
-
-
-def irls_weight(p: np.ndarray, weights: np.ndarray) -> None:
-    """IRLS weight: sqrt(p * (1-p)), clamped."""
-    _bridge_call(_lib.skmetal_irls_weight, p, weights, p.size)
-
-
-def scale_rows(X: np.ndarray, weights: np.ndarray, output: np.ndarray) -> None:
-    """Row scaling: output[i][j] = X[i][j] * weights[i]."""
-    _bridge_call(_lib.skmetal_scale_rows, X, weights, output, X.shape[0], X.shape[1])
-
-
-def center_columns(X: np.ndarray, mean: np.ndarray) -> None:
-    """In-place: X[i][j] -= mean[j]."""
-    _bridge_call(_lib.skmetal_center_columns, X, mean, X.shape[0], X.shape[1])
-
-
-def kmeans_combine_normalize(partial_centroids: np.ndarray, partial_counts: np.ndarray,
-                              centroids: np.ndarray, k: int, d: int, num_groups: int) -> None:
-    """Fused combine + normalize for KMeans."""
-    _bridge_call(_lib.skmetal_kmeans_combine_normalize,
-                 partial_centroids, partial_counts, centroids, k, d, num_groups)
 
 
 
@@ -305,15 +210,24 @@ def kmeans_shift(new_centroids: np.ndarray, old_centroids: np.ndarray,
         new_centroids.ctypes.data, old_centroids.ctypes.data, k, d)
 
 
-def ridge_fit(X: np.ndarray, y: np.ndarray,
-               XTX: np.ndarray, XTy: np.ndarray,
-               X_mean: np.ndarray) -> None:
-    """Center X in-place + compute X^T X + X^T y in one command buffer.
+def ridge_fit_solve(X: np.ndarray, y: np.ndarray,
+                     X_mean: np.ndarray, coef: np.ndarray,
+                     alpha: float) -> None:
+    """Fused Ridge: center X + XTX + XTy + L2 + Cholesky solve (one GPU dispatch)."""
+    _bridge_call(_lib.skmetal_ridge_fit_solve, X, y, X_mean, coef, alpha,
+                 X.shape[0], X.shape[1])
 
-    .. warning::
-       ``X`` is **modified in-place**: its columns are mean-centered.
-    """
-    _bridge_call(_lib.skmetal_ridge_fit, X, y, XTX, XTy, X_mean, X.shape[0], X.shape[1])
+
+def ridge_solve(XTX: np.ndarray, XTy: np.ndarray,
+                 coef: np.ndarray, alpha: float) -> None:
+    """L2-regularized Cholesky solve on GPU: (XTX + αI)⁻¹ XTy = coef."""
+    _bridge_call(_lib.skmetal_ridge_solve, XTX, XTy, coef, alpha, XTX.shape[0])
+
+
+def linear_solve(XTX: np.ndarray, XTy: np.ndarray,
+                  coef: np.ndarray) -> None:
+    """Unregularized Cholesky solve on GPU: XTX⁻¹ XTy = coef."""
+    _bridge_call(_lib.skmetal_linear_solve, XTX, XTy, coef, XTX.shape[0])
 
 
 def fista_fit(X: np.ndarray, y: np.ndarray, alpha: float, l1_ratio: float = 1.0,
@@ -330,7 +244,7 @@ def fista_fit(X: np.ndarray, y: np.ndarray, alpha: float, l1_ratio: float = 1.0,
         ctypes.byref(n_iter_out),
     )
     if err != 0:
-        raise RuntimeError(f"fista_fit failed with code {err}")
+        raise RuntimeError(f"fista_fit failed with code {err} (n={n}, p={p}, alpha={alpha}, l1_ratio={l1_ratio})")
     return coef, n_iter_out.value
 
 
@@ -343,12 +257,17 @@ def device_info() -> dict:
         )
     name_ptr = ctypes.c_char_p()
     max_threads = ctypes.c_size_t()
-    err = _lib.skmetal_device_info(ctypes.byref(name_ptr), ctypes.byref(max_threads))
+    unified = ctypes.c_uint8()
+    working_set = ctypes.c_uint64()
+    err = _lib.skmetal_device_info(ctypes.byref(name_ptr), ctypes.byref(max_threads),
+                                    ctypes.byref(unified), ctypes.byref(working_set))
     if err != 0:
-        raise RuntimeError("device_info failed")
+        raise RuntimeError("skmetal: device_info() failed (Metal driver may be in an invalid state)")
     return {
         "name": name_ptr.value.decode("utf-8") if name_ptr.value else "unknown",
         "max_threads_per_threadgroup": max_threads.value,
+        "has_unified_memory": bool(unified.value),
+        "recommended_working_set_size_bytes": working_set.value,
     }
 
 
@@ -407,13 +326,8 @@ def knn_tiled_kneighbors(X_query: np.ndarray, X_train: np.ndarray, k: int,
         ctypes.c_int32(mcode),
     )
     if err != 0:
-        raise RuntimeError(f"knn_tiled_kneighbors failed with code {err}")
+        raise RuntimeError(f"knn_tiled_kneighbors failed with code {err} (n_q={n_q}, n_t={n_t}, d={d}, k={k}, metric={metric})")
     return out_values, out_indices
-
-
-def soft_threshold(w: np.ndarray, w_temp: np.ndarray, threshold: float) -> None:
-    """Soft-thresholding: w[i] = sign(x) * max(|x| - t, 0)."""
-    _bridge_call(_lib.skmetal_soft_threshold, w, w_temp, threshold, w.size)
 
 
 def column_transform(input: np.ndarray, output: np.ndarray,
@@ -421,13 +335,6 @@ def column_transform(input: np.ndarray, output: np.ndarray,
     """output[i][j] = (input[i][j] - center[j]) * scale[j]."""
     _bridge_call(_lib.skmetal_column_transform,
                  input, output, center, scale, input.shape[0], input.shape[1])
-
-
-def transpose_f32(input: np.ndarray, output: np.ndarray) -> None:
-    """Transpose f32 matrix (row-major ↔ column-major)."""
-    if input.dtype != np.float32 or output.dtype != np.float32:
-        raise TypeError("input and output must be float32")
-    _bridge_call(_lib.skmetal_transpose_f32, input, output, input.shape[0], input.shape[1])
 
 
 def sv_init(parent: np.ndarray) -> None:
@@ -459,32 +366,6 @@ def tree_predict_all(X: np.ndarray, all_tree_values: np.ndarray, all_tree_featur
                  X.shape[0], X.shape[1], len(tree_offsets))
 
 
-def row_max(matrix: np.ndarray, max_vals: np.ndarray) -> None:
-    """Max per row of a matrix."""
-    _bridge_call(_lib.skmetal_row_max, matrix, max_vals, matrix.shape[0], matrix.shape[1])
-
-
-def row_sum(matrix: np.ndarray, sums: np.ndarray) -> None:
-    """Sum per row of a matrix."""
-    _bridge_call(_lib.skmetal_row_sum, matrix, sums, matrix.shape[0], matrix.shape[1])
-
-
-def softmax_exp(matrix: np.ndarray, max_vals: np.ndarray, output: np.ndarray) -> None:
-    """exp(matrix[row][col] - max_vals[row]) for each element."""
-    _bridge_call(_lib.skmetal_softmax_exp,
-                 matrix, max_vals, output, matrix.shape[0], matrix.shape[1])
-
-
-def softmax_normalize_residual(prob: np.ndarray, row_sums: np.ndarray,
-                                y: np.ndarray, residual: np.ndarray) -> None:
-    """Normalize softmax probs and compute residual = prob - one_hot."""
-    _bridge_call(_lib.skmetal_softmax_normalize_residual,
-                 prob, row_sums, y, residual, prob.shape[0], prob.shape[1])
-
-
-def negate(a: np.ndarray, output: np.ndarray) -> None:
-    """Element-wise negation: output[i] = -a[i]."""
-    _bridge_call(_lib.skmetal_negate, a, output, a.size)
 
 
 
@@ -530,6 +411,20 @@ def logreg_irls_fit(X: np.ndarray, y: np.ndarray, C: float, tol: float,
     coef = np.empty(p, dtype=np.float32, order="C")
     n_iter_out = ctypes.c_int32(0)
     _bridge_call(_lib.skmetal_logreg_irls_fit,
+                 X, y, coef, ctypes.c_float(C), ctypes.c_float(tol),
+                 ctypes.c_int32(max_iter), ctypes.c_int32(int(fit_intercept)),
+                 ctypes.c_size_t(n), ctypes.c_size_t(p),
+                 ctypes.byref(n_iter_out))
+    return coef, n_iter_out.value
+
+
+def logreg_lbfgs_fit(X: np.ndarray, y: np.ndarray, C: float, tol: float,
+                     max_iter: int, fit_intercept: bool) -> tuple[np.ndarray, int]:
+    """Full binary L-BFGS fit loop in Swift. Returns (coef, n_iter)."""
+    n, p = X.shape
+    coef = np.empty(p, dtype=np.float32, order="C")
+    n_iter_out = ctypes.c_int32(0)
+    _bridge_call(_lib.skmetal_logreg_lbfgs_fit,
                  X, y, coef, ctypes.c_float(C), ctypes.c_float(tol),
                  ctypes.c_int32(max_iter), ctypes.c_int32(int(fit_intercept)),
                  ctypes.c_size_t(n), ctypes.c_size_t(p),

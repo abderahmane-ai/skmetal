@@ -91,6 +91,239 @@ public func skmetal_ridge_fit(
     return 0
 }
 
+// MARK: - Fused Ridge: center + XTX + XTy + L2 + Cholesky solve (one command buffer)
+
+@_cdecl("skmetal_ridge_fit_solve")
+public func skmetal_ridge_fit_solve(
+    X: UnsafeMutableRawPointer,
+    y: UnsafeRawPointer,
+    X_mean_out: UnsafeMutableRawPointer,
+    coef_out: UnsafeMutableRawPointer,
+    alpha: Float,
+    n: Int,
+    p: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let fs = MemoryLayout<Float>.stride
+    let xSize = n * p * fs
+    let ySize = n * fs
+    let xtxSize = p * p * fs
+    let xtySize = p * fs
+    let meanSize = p * fs
+
+    guard let xBuffer = wrapOutput(X, length: xSize, device: ctx.device),
+          let yBuffer = wrapInput(y, length: ySize, device: ctx.device),
+          let meanBuffer = wrapOutput(X_mean_out, length: meanSize, device: ctx.device),
+          let coefBuffer = wrapOutput(coef_out, length: xtySize, device: ctx.device) else {
+        return 1
+    }
+
+    let xtxB = ctx.reusableBuffer(length: xtxSize)
+    let xtyB = ctx.reusableBuffer(length: xtySize)
+    guard let xtxBuffer = xtxB, let xtyBuffer = xtyB,
+          let statusBuffer = ctx.device.makeBuffer(length: MemoryLayout<Int32>.stride, options: .storageModeShared),
+          let addDiagPpl = ctx.getPipeline(name: "add_diagonal", functionName: "add_diagonal") else {
+        if let b = xtxB { ctx.recycleBuffer(b) }
+        if let b = xtyB { ctx.recycleBuffer(b) }
+        return 1
+    }
+
+    let rowBytesX = p * fs
+    let rowBytesXTX = p * fs
+
+    let descX = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
+    let descXTX = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytesXTX, dataType: .float32)
+    let descY = MPSMatrixDescriptor(dimensions: n, columns: 1, rowBytes: fs, dataType: .float32)
+    let descVec = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: fs, dataType: .float32)
+
+    let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
+    let matrixXTX = MPSMatrix(buffer: xtxBuffer, descriptor: descXTX)
+    let matrixY = MPSMatrix(buffer: yBuffer, descriptor: descY)
+    let matrixXTy = MPSMatrix(buffer: xtyBuffer, descriptor: descVec)
+    let matrixCoef = MPSMatrix(buffer: coefBuffer, descriptor: descVec)
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+    var nU = UInt32(n), pU = UInt32(p)
+
+    let computeEncoder = cb.makeComputeCommandEncoder()!
+    if let pipeline = ctx.getPipeline(name: "column_means", functionName: "column_means") {
+        computeEncoder.setComputePipelineState(pipeline)
+        computeEncoder.setBuffer(xBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(meanBuffer, offset: 0, index: 1)
+        computeEncoder.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+        computeEncoder.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
+        let blockCols = 8
+        let tgCount = (p + blockCols - 1) / blockCols
+        computeEncoder.dispatchThreadgroups(MTLSize(width: tgCount, height: 1, depth: 1),
+                                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    }
+    computeEncoder.endEncoding()
+
+    let centerEncoder = cb.makeComputeCommandEncoder()!
+    if let pipeline = ctx.getPipeline(name: "center_columns", functionName: "center_columns") {
+        centerEncoder.setComputePipelineState(pipeline)
+        centerEncoder.setBuffer(xBuffer, offset: 0, index: 0)
+        centerEncoder.setBuffer(meanBuffer, offset: 0, index: 1)
+        centerEncoder.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+        centerEncoder.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
+        centerEncoder.dispatchThreads(MTLSize(width: n * p, height: 1, depth: 1),
+                                      threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    }
+    centerEncoder.endEncoding()
+
+    let gemmXTX = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: p, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    gemmXTX.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixX, resultMatrix: matrixXTX)
+
+    let gemmXTy = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: 1, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    gemmXTy.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixY, resultMatrix: matrixXTy)
+
+    let encDiag = cb.makeComputeCommandEncoder()!
+    encDiag.setComputePipelineState(addDiagPpl)
+    encDiag.setBuffer(xtxBuffer, offset: 0, index: 0)
+    var a = alpha
+    encDiag.setBytes(&a, length: fs, index: 1)
+    encDiag.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 2)
+    encDiag.dispatchThreads(MTLSize(width: p, height: 1, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    encDiag.endEncoding()
+
+    let cholesky = MPSMatrixDecompositionCholesky(device: ctx.device, lower: true, order: p)
+    cholesky.encode(commandBuffer: cb, sourceMatrix: matrixXTX, resultMatrix: matrixXTX, status: statusBuffer)
+
+    let solve = MPSMatrixSolveCholesky(device: ctx.device, upper: false, order: p, numberOfRightHandSides: 1)
+    solve.encode(commandBuffer: cb, sourceMatrix: matrixXTX, rightHandSideMatrix: matrixXTy, solutionMatrix: matrixCoef)
+
+    cb.commit()
+    cb.waitUntilCompleted()
+
+    let status = statusBuffer.contents().assumingMemoryBound(to: Int32.self)[0]
+    ctx.recycleBuffer(xtxBuffer)
+    ctx.recycleBuffer(xtyBuffer)
+    guard status == 0 else { return 1 }
+
+    return 0
+}
+
+// MARK: - Ridge solve: L2 regularized Cholesky solve on GPU (standalone, for existing ridge_fit)
+
+@_cdecl("skmetal_ridge_solve")
+public func skmetal_ridge_solve(
+    XTX: UnsafeMutableRawPointer,
+    XTy: UnsafeMutableRawPointer,
+    coef_out: UnsafeMutableRawPointer,
+    alpha: Float,
+    p: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let fs = MemoryLayout<Float>.stride
+    let xtxSize = p * p * fs
+    let xtySize = p * fs
+
+    guard let xtxBuffer = wrapOutput(XTX, length: xtxSize, device: ctx.device),
+          let xtyBuffer = wrapOutput(XTy, length: xtySize, device: ctx.device),
+          let coefBuffer = wrapOutput(coef_out, length: xtySize, device: ctx.device) else {
+        return 1
+    }
+
+    guard let addDiagPpl = ctx.getPipeline(name: "add_diagonal", functionName: "add_diagonal") else {
+        return 1
+    }
+
+    guard let statusBuffer = ctx.device.makeBuffer(length: MemoryLayout<Int32>.stride, options: .storageModeShared) else {
+        return 1
+    }
+
+    let rowBytes = p * fs
+    let descXTX = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytes, dataType: .float32)
+    let descVec = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: fs, dataType: .float32)
+
+    let matrixXTX = MPSMatrix(buffer: xtxBuffer, descriptor: descXTX)
+    let matrixXTy = MPSMatrix(buffer: xtyBuffer, descriptor: descVec)
+    let matrixCoef = MPSMatrix(buffer: coefBuffer, descriptor: descVec)
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+
+    let encDiag = cb.makeComputeCommandEncoder()!
+    encDiag.setComputePipelineState(addDiagPpl)
+    encDiag.setBuffer(xtxBuffer, offset: 0, index: 0)
+    var a = alpha
+    encDiag.setBytes(&a, length: fs, index: 1)
+    var pU = UInt32(p)
+    encDiag.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 2)
+    encDiag.dispatchThreads(MTLSize(width: p, height: 1, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    encDiag.endEncoding()
+
+    let cholesky = MPSMatrixDecompositionCholesky(device: ctx.device, lower: true, order: p)
+    cholesky.encode(commandBuffer: cb, sourceMatrix: matrixXTX, resultMatrix: matrixXTX, status: statusBuffer)
+
+    let solve = MPSMatrixSolveCholesky(device: ctx.device, upper: false, order: p, numberOfRightHandSides: 1)
+    solve.encode(commandBuffer: cb, sourceMatrix: matrixXTX, rightHandSideMatrix: matrixXTy, solutionMatrix: matrixCoef)
+
+    cb.commit()
+    cb.waitUntilCompleted()
+
+    let status = statusBuffer.contents().assumingMemoryBound(to: Int32.self)[0]
+    guard status == 0 else { return 1 }
+
+    return 0
+}
+
+// MARK: - Linear solve: unregularized Cholesky solve on GPU (LinearRegression)
+
+@_cdecl("skmetal_linear_solve")
+public func skmetal_linear_solve(
+    XTX: UnsafeMutableRawPointer,
+    XTy: UnsafeMutableRawPointer,
+    coef_out: UnsafeMutableRawPointer,
+    p: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let fs = MemoryLayout<Float>.stride
+    let xtxSize = p * p * fs
+    let xtySize = p * fs
+
+    guard let xtxBuffer = wrapOutput(XTX, length: xtxSize, device: ctx.device),
+          let xtyBuffer = wrapOutput(XTy, length: xtySize, device: ctx.device),
+          let coefBuffer = wrapOutput(coef_out, length: xtySize, device: ctx.device) else {
+        return 1
+    }
+
+    guard let statusBuffer = ctx.device.makeBuffer(length: MemoryLayout<Int32>.stride, options: .storageModeShared) else {
+        return 1
+    }
+
+    let rowBytes = p * fs
+    let descXTX = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytes, dataType: .float32)
+    let descVec = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: fs, dataType: .float32)
+
+    let matrixXTX = MPSMatrix(buffer: xtxBuffer, descriptor: descXTX)
+    let matrixXTy = MPSMatrix(buffer: xtyBuffer, descriptor: descVec)
+    let matrixCoef = MPSMatrix(buffer: coefBuffer, descriptor: descVec)
+
+    let cb = ctx.commandQueue.makeCommandBuffer()!
+
+    let cholesky = MPSMatrixDecompositionCholesky(device: ctx.device, lower: true, order: p)
+    cholesky.encode(commandBuffer: cb, sourceMatrix: matrixXTX, resultMatrix: matrixXTX, status: statusBuffer)
+
+    let solve = MPSMatrixSolveCholesky(device: ctx.device, upper: false, order: p, numberOfRightHandSides: 1)
+    solve.encode(commandBuffer: cb, sourceMatrix: matrixXTX, rightHandSideMatrix: matrixXTy, solutionMatrix: matrixCoef)
+
+    cb.commit()
+    cb.waitUntilCompleted()
+
+    let status = statusBuffer.contents().assumingMemoryBound(to: Int32.self)[0]
+    guard status == 0 else { return 1 }
+
+    return 0
+}
+
 // MARK: - Soft threshold (Lasso FISTA)
 
 @_cdecl("skmetal_soft_threshold")
@@ -225,76 +458,25 @@ public func skmetal_fista_fit(
     }
 
     let L: Float = {
-        if p == 1 {
-            return abs(xtxBuf.contents().load(as: Float.self))
-        }
-        guard let vBuf = ctx.device.makeBuffer(length: pBufSize, options: .storageModeShared),
-              let uBuf = ctx.device.makeBuffer(length: pBufSize, options: .storageModeShared),
-              let sumBuf = ctx.device.makeBuffer(length: fs, options: .storageModeShared) else {
-            return 1
-        }
-        let vPtr = vBuf.contents().assumingMemoryBound(to: Float.self)
+        // Use Accelerate BLAS on CPU: XTX is only p×p (tiny for p ≤ 100).
+        // Much simpler than GPU power iteration — no batching bugs, no NaN from float32 underflow.
         let xtxPtr = xtxBuf.contents().assumingMemoryBound(to: Float.self)
-        for i in 0..<p { vPtr[i] = xtxPtr[i * p] }
-
-        let mV = MPSMatrix(buffer: vBuf, descriptor: colDesc)
-        let mU = MPSMatrix(buffer: uBuf, descriptor: colDesc)
-
-        let powerIters = 20
-        let groupSize = 5
-        for batchStart in stride(from: 0, to: powerIters, by: groupSize) {
-            let batchEnd = min(batchStart + groupSize, powerIters)
-            let cb = ctx.commandQueue.makeCommandBuffer()!
-
-            for _ in batchStart..<batchEnd {
-                let gemm = ctx.getMPSGemm(transposeLeft: false, transposeRight: false,
-                                           resultRows: p, resultColumns: 1, interiorColumns: p,
-                                           alpha: 1.0, beta: 0.0)
-                gemm.encode(commandBuffer: cb, leftMatrix: mXTX, rightMatrix: mV, resultMatrix: mU)
-
-                let encNS = cb.makeComputeCommandEncoder()!
-                encNS.setComputePipelineState(nsPpl)
-                encNS.setBuffer(uBuf, offset: 0, index: 0)
-                encNS.setBuffer(vBuf, offset: 0, index: 1)
-                var nU32 = UInt32(p)
-                encNS.setBytes(&nU32, length: MemoryLayout<UInt32>.stride, index: 2)
-                encNS.dispatchThreadgroups(MTLSize(width: (p + 255) / 256, height: 1, depth: 1),
-                                           threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-                encNS.endEncoding()
-
-                let ng = max(1, (p + 255) / 256)
-                let encRS = cb.makeComputeCommandEncoder()!
-                encRS.setComputePipelineState(rsPpl)
-                encRS.setBuffer(vBuf, offset: 0, index: 0)
-                encRS.setBuffer(sumBuf, offset: 0, index: 1)
-                nU32 = UInt32(p)
-                encRS.setBytes(&nU32, length: MemoryLayout<UInt32>.stride, index: 2)
-                var ngU32 = UInt32(ng)
-                encRS.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
-                encRS.dispatchThreadgroups(MTLSize(width: ng, height: 1, depth: 1),
-                                           threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-                encRS.endEncoding()
-            }
-
-            cb.commit()
-            cb.waitUntilCompleted()
-
-            let uPtr = uBuf.contents().assumingMemoryBound(to: Float.self)
-            let sumPtr = sumBuf.contents().assumingMemoryBound(to: Float.self)
-            for _ in batchStart..<batchEnd {
-                let norm = sqrt(sumPtr[0])
-                if norm < 1e-10 { break }
-                for i in 0..<p { vPtr[i] = uPtr[i] / norm }
-            }
+        var v = [Float](repeating: 0, count: p)
+        var u = [Float](repeating: 0, count: p)
+        for i in 0..<p { v[i] = xtxPtr[i * p] }  // diagonal initial vector
+        for _ in 0..<20 {
+            cblas_sgemv(CblasRowMajor, CblasNoTrans, Int32(p), Int32(p),
+                        1.0, xtxPtr, Int32(p), v, 1, 0.0, &u, 1)
+            let norm = cblas_snrm2(Int32(p), &u, 1)
+            guard norm >= 1e-10, !norm.isNaN else { return 0.0 }  // fallback: safe but slow
+            for i in 0..<p { v[i] = u[i] / norm }
         }
-
-        let uPtr = uBuf.contents().assumingMemoryBound(to: Float.self)
-        var Lval: Float = 0
-        for i in 0..<p { Lval += vPtr[i] * uPtr[i] }
-        return abs(Lval)
+        var Lv: Float = 0
+        for i in 0..<p { Lv += v[i] * u[i] }
+      return abs(Lv)
     }()
 
-    guard L > 1e-10 else { return 1 }
+    if L <= 1e-10 { return 1 }
     let step = 1.0 / L
     let thresh = step * alpha * l1_ratio * Float(n)
     let enDenom: Float = (l1_ratio < 1.0) ? (1.0 + step * alpha * (1.0 - l1_ratio) * Float(n)) : 1.0

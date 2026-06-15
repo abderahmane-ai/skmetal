@@ -245,6 +245,32 @@ kernel void knn_select_tile_topk_cosine(
     }
 }
 
+// Negate distances for MPSMatrixFindTopK (which finds largest values).
+// Euclidean:  out = 2*dot - rq - rt  = -dist^2  (larger = closer)
+// Cosine:     out = dot / (sqrt(rq)*sqrt(rt))  (larger = more similar)
+kernel void knn_negate_distances(
+    device const float* dot [[buffer(0)]],
+    device const float* r_query [[buffer(1)]],
+    device const float* r_train [[buffer(2)]],
+    device float* out [[buffer(3)]],
+    constant uint& n_q [[buffer(4)]],
+    constant uint& n_t [[buffer(5)]],
+    constant uint& is_cosine [[buffer(6)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n_q * n_t) return;
+    uint i = tid / n_t;
+    uint j = tid % n_t;
+    float d = dot[tid];
+    if (is_cosine != 0) {
+        float rq = r_query[i] + 1e-10f;
+        float rt = r_train[j] + 1e-10f;
+        out[tid] = d * rsqrt(rq) * rsqrt(rt);
+    } else {
+        out[tid] = 2.0f * d - r_query[i] - r_train[j];
+    }
+}
+
 // Weighted majority-vote classification using distances.
 // Supports up to 256 classes. weight = 1 / (distance + eps).
 kernel void knn_vote_classify_weighted(

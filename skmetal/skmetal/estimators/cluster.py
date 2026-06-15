@@ -11,6 +11,7 @@ from .._bridge import (
     kmeans_batch_fused,
     sv_init, sv_hook, sv_shortcut,
 )
+from .._config import get_config
 
 
 
@@ -44,8 +45,9 @@ class MetalKMeans(BaseGPUEstimator):
                 X, centroids, assignments, n, d, k, num_groups, max_iter, tol
             )
 
-            # Validate assignments — GPU kernel may write garbage on some runners
             if assignments.min() < 0 or assignments.max() >= k:
+                if get_config().verbose:
+                    print("[skmetal] KMeans: GPU output invalid, falling back to CPU")
                 centroids, assignments = self._kmeans_cpu_fallback(X, k, max_iter, tol, rng)
                 actual_iters = max_iter
 
@@ -212,8 +214,9 @@ class MetalDBSCAN(BaseGPUEstimator):
         eps = self._estimator.eps
         min_samples = self._estimator.min_samples
 
-        # For high-D data, sklearn's tree-based DBSCAN is faster than GPU O(n²)
         if d > 6:
+            if get_config().verbose:
+                print(f"[skmetal] DBSCAN: d={d} > 6, tree-based CPU faster than GPU O(n²)")
             return self._fallback_fit(X, y, **kwargs)
 
         D = pairwise_distance(X)

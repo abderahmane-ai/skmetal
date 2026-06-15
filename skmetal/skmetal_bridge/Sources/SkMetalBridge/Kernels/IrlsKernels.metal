@@ -122,10 +122,58 @@ kernel void multinomial_hessians(
     hessians[c * p_packed + idx] = h;
 }
 
+// Fused: sigmoid + residual (prob - y) + per-element log loss.
+// For L-BFGS gradient and loss computation (binary logistic regression).
+// y ∈ {0, 1}, y_adj = 2*y - 1 ∈ {-1, 1}
+// Log loss: log(1 + exp(-y_adj * lin)) — numerically stable.
+kernel void sigmoid_grad_loss_binary(
+    device const float* lin [[buffer(0)]],
+    device const float* y [[buffer(1)]],
+    device float* prob [[buffer(2)]],
+    device float* residual [[buffer(3)]],
+    device float* loss_i [[buffer(4)]],
+    constant uint& n [[buffer(5)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    float z = lin[tid];
+    z = clamp(z, -100.0f, 100.0f);
+    float p = 1.0f / (1.0f + exp(-z));
+    prob[tid] = p;
+    residual[tid] = p - y[tid];
+    float y_adj = 2.0f * y[tid] - 1.0f;
+    float t = -y_adj * z;
+    if (t > 0) {
+        loss_i[tid] = t + log(1.0f + exp(-t));
+    } else {
+        loss_i[tid] = log(1.0f + exp(t));
+    }
+}
+
+// Per-element log loss only (for line search, no sigmoid needed).
+// Uses same numerically stable log(1+exp(-y_adj * lin)).
+kernel void log_loss_binary(
+    device const float* lin [[buffer(0)]],
+    device const float* y [[buffer(1)]],
+    device float* loss_i [[buffer(2)]],
+    constant uint& n [[buffer(3)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= n) return;
+    float z = lin[tid];
+    float y_adj = 2.0f * y[tid] - 1.0f;
+    float t = -y_adj * z;
+    if (t > 0) {
+        loss_i[tid] = t + log(1.0f + exp(-t));
+    } else {
+        loss_i[tid] = log(1.0f + exp(t));
+    }
+}
+
 // L2 regularization gradient term (Hessian diagonal is fused into multinomial_hessians):
 //   gradient[c][i] += alpha * W[i][c]
 // gradient is stored as (C, p) — contiguous per-class
-// W is stored as (p, C) — column-major per-class
+// W is stored as (p, C) — column-master per-class
 kernel void multinomial_grad_l2(
     device float* gradient [[buffer(0)]],
     device const float* W [[buffer(1)]],

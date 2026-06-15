@@ -4,20 +4,24 @@ import threading
 
 
 PER_ESTIMATOR_THRESHOLDS = {
-    "StandardScaler":    (1_000,   10),
-    "MinMaxScaler":      (500_000, 10),
-    "RobustScaler":      (100_000, 10),
+    # --- GPU winners (benchmarked at 100K × 200) ---
+    "StandardScaler":    (1_000,   10),    # 7.27× GPU
+    "LinearRegression":  (50_000,  50),    # 5.19× GPU
+    "TruncatedSVD":      (5_000,   20),    # 4.95× GPU
+    "ElasticNet":        (50_000,  50),    # 1.53× GPU
+    "Lasso":             (50_000,  50),    # 1.40× GPU
+    "LogisticRegression":(500_000, 500),   # 0.93× tied at 100K×200; likely wins for p>500
 
-    "TruncatedSVD":      (5_000,   20),
-    "Ridge":             (100_000, 50),
-    "Lasso":             (50_000,  50),
-    "ElasticNet":        (50_000,  50),
-    "LinearRegression":  (50_000,  50),
-    "LogisticRegression":(20_000,  20),
-    "KMeans":            (5_000,   5),
+    # --- CPU wins at 100K × 200 (keep on CPU) ---
+    "Ridge":             (10_000_000, 10_000),  # 0.72× CPU (Accelerate sub-ms, dispatch overhead kills GPU)
+    "MinMaxScaler":      (500_000, 10),    # 0.72× CPU
+    "KNeighborsClassifier":  (5_000_000, 10_000),  # 0.62× CPU
+    "KNeighborsRegressor":   (5_000_000, 10_000),  # 0.62× CPU (same kernel)
+    "KMeans":            (5_000_000, 5_000),  # 0.24× CPU (skmetal GPU kernel not competitive)
+
+    # --- Conservative defaults (not benchmarked) ---
+    "RobustScaler":      (100_000, 10),
     "DBSCAN":            (1_000,   2),
-    "KNeighborsClassifier":  (5_000,   10),
-    "KNeighborsRegressor":   (5_000,   10),
     "HistGradientBoostingClassifier":   (10_000, 10),
     "HistGradientBoostingRegressor":    (10_000, 10),
     "GaussianNB":        (10_000,  10),
@@ -40,6 +44,14 @@ class Config:
     @device.setter
     def device(self, val: str):
         self._device = val
+
+    def __repr__(self):
+        n_gpu = sum(1 for v in self.thresholds.values() if v[0] < 1e8)
+        n_cpu = len(self.thresholds) - n_gpu
+        return (
+            f"device={self.device}, threshold={self.threshold}, verbose={self.verbose}\n"
+            f"  estimators routed to GPU: {n_gpu}  |  estimators routed to CPU: {n_cpu}"
+        )
 
 
 _config = Config()
@@ -112,3 +124,9 @@ def set_thresholds(thresholds: dict) -> None:
 def update_threshold(name: str, min_rows: int, min_cols: int) -> None:
     with _lock:
         _config.thresholds[name] = (min_rows, min_cols)
+
+
+def reset_thresholds() -> None:
+    """Restore per-estimator thresholds to default values."""
+    with _lock:
+        _config.thresholds = dict(PER_ESTIMATOR_THRESHOLDS)

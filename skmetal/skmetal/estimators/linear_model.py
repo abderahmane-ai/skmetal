@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, ridge_fit, logreg_irls_fit, multinomial_irls_fit, fista_fit
+from .._bridge import gemm, ridge_fit_solve, linear_solve, logreg_irls_fit, logreg_lbfgs_fit, multinomial_irls_fit, fista_fit
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -22,14 +22,17 @@ class MetalLinearRegression(BaseGPUEstimator):
             yc = y
 
         XTX = gemm(Xc, Xc, trans_A=True)
-        XTy = gemm(Xc, yc.reshape(-1, 1), trans_A=True)
+        XTy = gemm(Xc, yc.reshape(-1, 1), trans_A=True).ravel()
 
-        XTX_np = np.array(XTX, dtype=np.float64)
-        XTy_np = np.array(XTy, dtype=np.float64).ravel()
+        coef = np.empty(p, dtype=np.float32)
+        try:
+            linear_solve(XTX.copy(), XTy.copy(), coef)
+        except RuntimeError:
+            XTX_f64 = np.array(XTX, dtype=np.float64)
+            XTy_f64 = np.array(XTy, dtype=np.float64)
+            coef[:] = np.linalg.lstsq(XTX_f64, XTy_f64, rcond=None)[0].astype(np.float32)
 
-        coef = np.linalg.lstsq(XTX_np, XTy_np, rcond=None)[0]
-
-        self._estimator.coef_ = coef.astype(np.float32)
+        self._estimator.coef_ = coef
         if fit_intercept:
             self._estimator.intercept_ = y_mean - X_mean @ coef
         else:
@@ -56,16 +59,12 @@ class MetalRidge(BaseGPUEstimator):
         alpha = self._estimator.alpha
         fit_intercept = self._estimator.fit_intercept
 
-        XTX = np.empty((p, p), dtype=np.float32)
-        XTy = np.empty(p, dtype=np.float32)
         X_mean = np.empty(p, dtype=np.float32)
+        coef = np.empty(p, dtype=np.float32)
 
-        ridge_fit(X, y, XTX, XTy, X_mean)
+        ridge_fit_solve(X, y, X_mean, coef, alpha)
 
-        np.fill_diagonal(XTX, XTX.diagonal() + alpha)
-        coef = np.linalg.solve(XTX, XTy)
-
-        self._estimator.coef_ = coef.astype(np.float32)
+        self._estimator.coef_ = coef
         if fit_intercept:
             self._estimator.intercept_ = float(y.mean()) - X_mean @ coef
         else:
@@ -155,6 +154,8 @@ class MetalElasticNet(BaseGPUEstimator):
 
 class MetalLogisticRegression(BaseGPUEstimator):
     def fit(self, X, y, **kwargs):
+        # Pop solver kwarg before passing through to fallback
+        solver = kwargs.pop("solver", "irls")
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y, **kwargs)
@@ -168,10 +169,9 @@ class MetalLogisticRegression(BaseGPUEstimator):
 
         classes = np.unique(y)
         n_classes = len(classes)
-
         if n_classes == 2:
             coef_, intercept_ = self._fit_binary(
-                X, y, C, tol, max_iter, fit_intercept, penalty, pos_label=classes[1]
+                X, y, C, tol, max_iter, fit_intercept, penalty, pos_label=classes[1], solver=solver
             )
             self._estimator.coef_ = coef_.reshape(1, -1)
             self._estimator.intercept_ = np.array([intercept_])
@@ -182,7 +182,7 @@ class MetalLogisticRegression(BaseGPUEstimator):
         self._fitted = True
         return self
 
-    def _fit_binary(self, X, y, C, tol, max_iter, fit_intercept, penalty, pos_label):
+    def _fit_binary(self, X, y, C, tol, max_iter, fit_intercept, penalty, pos_label, solver="irls"):
         n = X.shape[0]
 
         if fit_intercept:
@@ -191,8 +191,10 @@ class MetalLogisticRegression(BaseGPUEstimator):
         else:
             Xe = X
 
-        # Full IRLS loop in Swift — single bridge call
-        coef, n_iter = logreg_irls_fit(Xe, y, C, tol, max_iter, fit_intercept)
+        if solver == "lbfgs":
+            coef, n_iter = logreg_lbfgs_fit(Xe, y, C, tol, max_iter, fit_intercept)
+        else:
+            coef, n_iter = logreg_irls_fit(Xe, y, C, tol, max_iter, fit_intercept)
         self._estimator.n_iter_ = [n_iter]
 
         if fit_intercept:

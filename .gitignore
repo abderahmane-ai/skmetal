@@ -40,6 +40,7 @@ env/
 skmetal/skmetal/MetalSource.swift
 skmetal/skmetal_bridge/Sources/SkMetalBridge/MetalSource.swift
 *.metallib
+SkMetalBridge_SkMetalBridge.bundle/
 graphify-out/
 
 # Agent instructions (not committed, local to each session)

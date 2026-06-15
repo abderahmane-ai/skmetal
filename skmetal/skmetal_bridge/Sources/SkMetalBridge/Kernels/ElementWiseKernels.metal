@@ -235,6 +235,17 @@ kernel void convert_f16_to_f32(
     output[tid] = float(input[tid]);
 }
 
+// Add scalar to diagonal of a square matrix (L2 regularization for Ridge/IRLS)
+kernel void add_diagonal(
+    device float* matrix [[buffer(0)]],
+    constant float& value [[buffer(1)]],
+    constant uint& p [[buffer(2)]],
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= p) return;
+    matrix[tid * p + tid] += value;
+}
+
 // Fill a buffer with a constant float value
 kernel void fill_f32(
     device float* buf [[buffer(0)]],

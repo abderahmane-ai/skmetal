@@ -19,21 +19,32 @@ class BaseGPUEstimator(BaseEstimator):
 
     def _should_use_gpu(self, X):
         config = get_config()
-        # Use thread-local device so accelerate_context is truly per-thread.
         if _get_device() == "cpu":
+            if config.verbose:
+                print(f"[skmetal] {type(self).__name__}: device=cpu (forced by set_device)")
             return False
         if hasattr(X, "nnz"):
+            if config.verbose:
+                print(f"[skmetal] {type(self).__name__}: device=cpu (sparse matrix)")
             return False
         if X.dtype != np.float32:
+            if config.verbose:
+                print(f"[skmetal] {type(self).__name__}: device=cpu (dtype={X.dtype}, need float32)")
             return False
         n, d = X.shape
         if n * d < config.threshold:
+            if config.verbose:
+                print(f"[skmetal] {type(self).__name__}: device=cpu ({n}×{d} = {n*d:,} < {config.threshold:,} threshold)")
             return False
         name = type(self._estimator).__name__ if self._estimator else type(self).__name__
         if name in config.thresholds:
             min_rows, min_cols = config.thresholds[name]
             if n < min_rows or d < min_cols:
+                if config.verbose:
+                    print(f"[skmetal] {type(self).__name__}: device=cpu ({n}×{d} < per-estimator min {min_rows}×{min_cols})")
                 return False
+        if config.verbose:
+            print(f"[skmetal] {type(self).__name__}: device=gpu ({n}×{d})")
         return True
 
 
