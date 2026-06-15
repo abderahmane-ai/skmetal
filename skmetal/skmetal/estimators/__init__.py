@@ -5,6 +5,11 @@ from ._registry import GPU_REGISTRY, GPU_ESTIMATORS
 from .linear_model import MetalLinearRegression, MetalRidge, MetalLogisticRegression, MetalLasso, MetalElasticNet
 
 from .cluster import MetalKMeans, MetalDBSCAN
+
+try:
+    from ._mlx_kmeans import MetalKMeansMLX  # noqa: F401
+except ImportError:
+    pass
 from .naive_bayes import MetalGaussianNB
 from .preprocessing import MetalStandardScaler, MetalMinMaxScaler, MetalRobustScaler
 from .neighbors import MetalKNeighborsClassifier, MetalKNeighborsRegressor, MetalNearestNeighbors
@@ -24,6 +29,7 @@ __all__ = [
     "MetalElasticNet",
 
     "MetalKMeans",
+    "MetalKMeansMLX",
     "MetalDBSCAN",
     "MetalGaussianNB",
     "MetalStandardScaler",

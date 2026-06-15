@@ -1,8 +1,6 @@
 import Foundation
 import Metal
 import MetalPerformanceShaders
-import Accelerate
-
 
 
 // MARK: - IRLS fit: full binary LogisticRegression loop in Swift
@@ -68,21 +66,49 @@ public func skmetal_logreg_irls_fit(
         return 1
     }
 
+    // Fused IRLS: encode ALL iterations into 1 command buffer.
     let maxIter = Int(max_iter)
-    var nIter: Int32 = 0
+    let ng = max(1, (p + 255) / 256)
+    let convEntries = ng * 2  // step_norm_sq + w_norm_sq per iteration
+    let convBufSize = maxIter * convEntries * fs
+    let snapBufSize = maxIter * pSize
+    let statusSnapSize = maxIter * MemoryLayout<Int32>.stride
+
+    guard let convBuf = ctx.reusableBuffer(length: convBufSize),
+          let snapBuf = ctx.reusableBuffer(length: snapBufSize),
+          let statusSnapBuf = ctx.reusableBuffer(length: statusSnapSize),
+          let norm2Ppl = ctx.getPipeline(name: "norm2", functionName: "norm2"),
+          let axpyPpl = ctx.getPipeline(name: "axpy", functionName: "axpy") else {
+        return 1
+    }
+
+    // Reusable MPS objects (same dimensions every iteration)
+    let gemmXW = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: false, transposeRight: false,
+        resultRows: n, resultColumns: 1, interiorColumns: p,
+        alpha: 1.0, beta: 0.0)
+    let gemmHH = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: p, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    let gemmGrad = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: true, transposeRight: false,
+        resultRows: p, resultColumns: 1, interiorColumns: n,
+        alpha: 1.0, beta: 0.0)
+    let cholesky = MPSMatrixDecompositionCholesky(device: ctx.device, lower: true, order: p)
+    let solve = MPSMatrixSolveCholesky(device: ctx.device, upper: false, order: p, numberOfRightHandSides: 1)
+
+    let globalCB = ctx.commandQueue.makeCommandBuffer()!
+    let tg256 = MTLSize(width: 256, height: 1, depth: 1)
+    let ngSize = MTLSize(width: ng, height: 1, depth: 1)
 
     for it in 0..<maxIter {
-        nIter = Int32(it + 1)
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        // X @ w → linear
+        gemmXW.encode(commandBuffer: globalCB, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
 
-        let gemmXW = MPSMatrixMultiplication(
-            device: ctx.device, transposeLeft: false, transposeRight: false,
-            resultRows: n, resultColumns: 1, interiorColumns: p,
-            alpha: 1.0, beta: 0.0)
-        gemmXW.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
-
+        // Sigmoid → weight
         if let pipeline = ctx.getPipeline(name: "compute_linear_irls", functionName: "compute_linear_irls") {
-            let enc = cb.makeComputeCommandEncoder()!
+            let enc = globalCB.makeComputeCommandEncoder()!
             enc.setComputePipelineState(pipeline)
             enc.setBuffer(linearBuffer, offset: 0, index: 0)
             enc.setBuffer(weightBuffer, offset: 0, index: 1)
@@ -91,12 +117,13 @@ public func skmetal_logreg_irls_fit(
             var nU = UInt32(n)
             enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
             enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
-                                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+                                threadsPerThreadgroup: tg256)
             enc.endEncoding()
         }
 
+        // X_scaled = X * sqrt(weight[i]), error = sigmoid - y
         if let pipeline = ctx.getPipeline(name: "compute_error_scale", functionName: "compute_error_scale") {
-            let enc = cb.makeComputeCommandEncoder()!
+            let enc = globalCB.makeComputeCommandEncoder()!
             enc.setComputePipelineState(pipeline)
             enc.setBuffer(linearBuffer, offset: 0, index: 0)
             enc.setBuffer(yBuffer, offset: 0, index: 1)
@@ -108,25 +135,20 @@ public func skmetal_logreg_irls_fit(
             enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 6)
             enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 7)
             enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
-                                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+                                threadsPerThreadgroup: tg256)
             enc.endEncoding()
         }
 
-        let gemmHH = MPSMatrixMultiplication(
-            device: ctx.device, transposeLeft: true, transposeRight: false,
-            resultRows: p, resultColumns: p, interiorColumns: n,
-            alpha: 1.0, beta: 0.0)
-        gemmHH.encode(commandBuffer: cb, leftMatrix: matrixXS, rightMatrix: matrixXS, resultMatrix: matrixH)
+        // Hessian = X_scaledᵀ @ X_scaled
+        gemmHH.encode(commandBuffer: globalCB, leftMatrix: matrixXS, rightMatrix: matrixXS, resultMatrix: matrixH)
 
-        let gemmGrad = MPSMatrixMultiplication(
-            device: ctx.device, transposeLeft: true, transposeRight: false,
-            resultRows: p, resultColumns: 1, interiorColumns: n,
-            alpha: 1.0, beta: 0.0)
-        gemmGrad.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixLin, resultMatrix: matrixG)
+        // Gradient = Xᵀ @ error
+        gemmGrad.encode(commandBuffer: globalCB, leftMatrix: matrixX, rightMatrix: matrixLin, resultMatrix: matrixG)
 
+        // L2: Hessian += α·I, gradient += α·w
         if alpha != 0 {
             if let pipeline = ctx.getPipeline(name: "l2_reg_irls", functionName: "l2_reg_irls") {
-                let enc = cb.makeComputeCommandEncoder()!
+                let enc = globalCB.makeComputeCommandEncoder()!
                 enc.setComputePipelineState(pipeline)
                 enc.setBuffer(hBuffer, offset: 0, index: 0)
                 enc.setBuffer(gBuffer, offset: 0, index: 1)
@@ -136,36 +158,107 @@ public func skmetal_logreg_irls_fit(
                 var pU = UInt32(p)
                 enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 4)
                 enc.dispatchThreads(MTLSize(width: p, height: 1, depth: 1),
-                                    threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+                                    threadsPerThreadgroup: tg256)
                 enc.endEncoding()
             }
         }
 
-        let cholesky = MPSMatrixDecompositionCholesky(device: ctx.device, lower: true, order: p)
-        cholesky.encode(commandBuffer: cb, sourceMatrix: matrixH, resultMatrix: matrixH, status: statusBuffer)
+        // Cholesky solve: H \ g → d
+        cholesky.encode(commandBuffer: globalCB, sourceMatrix: matrixH, resultMatrix: matrixH, status: statusBuffer)
+        solve.encode(commandBuffer: globalCB, sourceMatrix: matrixH, rightHandSideMatrix: matrixG, solutionMatrix: matrixD)
 
-        let solve = MPSMatrixSolveCholesky(device: ctx.device, upper: false, order: p, numberOfRightHandSides: 1)
-        solve.encode(commandBuffer: cb, sourceMatrix: matrixH, rightHandSideMatrix: matrixG, solutionMatrix: matrixD)
+        // Snapshot current w (pre-update) for convergence retrieval
+        let snapBlit = globalCB.makeBlitCommandEncoder()!
+        snapBlit.copy(from: wBuffer, sourceOffset: 0,
+                      to: snapBuf, destinationOffset: it * pSize,
+                      size: pSize)
+        snapBlit.endEncoding()
 
-        cb.commit()
-        cb.waitUntilCompleted()
+        // Snapshot Cholesky status
+        let statusBlit = globalCB.makeBlitCommandEncoder()!
+        statusBlit.copy(from: statusBuffer, sourceOffset: 0,
+                        to: statusSnapBuf, destinationOffset: it * MemoryLayout<Int32>.stride,
+                        size: MemoryLayout<Int32>.stride)
+        statusBlit.endEncoding()
 
-        let status = statusBuffer.contents().assumingMemoryBound(to: Int32.self)[0]
-        guard status == 0 else { return 1 }
+        // ||d||² → convBuf[it*convEntries .. it*convEntries + ng)
+        let encStepNorm = globalCB.makeComputeCommandEncoder()!
+        encStepNorm.setComputePipelineState(norm2Ppl)
+        encStepNorm.setBuffer(dBuffer, offset: 0, index: 0)
+        encStepNorm.setBuffer(convBuf, offset: 0, index: 1)
+        var pU32 = UInt32(p)
+        var ngU32 = UInt32(ng)
+        var stepOff = UInt32(it * convEntries)
+        encStepNorm.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 2)
+        encStepNorm.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
+        encStepNorm.setBytes(&stepOff, length: MemoryLayout<UInt32>.stride, index: 4)
+        encStepNorm.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
+        encStepNorm.endEncoding()
 
-        let dPtr = dBuffer.contents().assumingMemoryBound(to: Float.self)
-        let wPtr = wBuffer.contents().assumingMemoryBound(to: Float.self)
-        let stepNorm = cblas_snrm2(Int32(p), dPtr, 1)
-        let wNorm = cblas_snrm2(Int32(p), wPtr, 1)
-        if stepNorm < tol * max(1.0, wNorm) { break }
+        // ||w||² → convBuf[it*convEntries + ng .. it*convEntries + 2*ng)
+        let encWNorm = globalCB.makeComputeCommandEncoder()!
+        encWNorm.setComputePipelineState(norm2Ppl)
+        encWNorm.setBuffer(wBuffer, offset: 0, index: 0)
+        encWNorm.setBuffer(convBuf, offset: 0, index: 1)
+        var wOff = UInt32(it * convEntries + ng)
+        encWNorm.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 2)
+        encWNorm.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
+        encWNorm.setBytes(&wOff, length: MemoryLayout<UInt32>.stride, index: 4)
+        encWNorm.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
+        encWNorm.endEncoding()
 
-        cblas_saxpy(Int32(p), -1.0, dPtr, 1, wPtr, 1)
+        // w -= d (GPU axpy)
+        let encAxpy = globalCB.makeComputeCommandEncoder()!
+        encAxpy.setComputePipelineState(axpyPpl)
+        encAxpy.setBuffer(wBuffer, offset: 0, index: 0)
+        encAxpy.setBuffer(dBuffer, offset: 0, index: 1)
+        var negOne: Float = -1.0
+        encAxpy.setBytes(&negOne, length: fs, index: 2)
+        encAxpy.setBytes(&pU32, length: MemoryLayout<UInt32>.stride, index: 3)
+        encAxpy.dispatchThreadgroups(ngSize, threadsPerThreadgroup: tg256)
+        encAxpy.endEncoding()
+    }
+
+    globalCB.commit()
+    globalCB.waitUntilCompleted()
+
+    // Post-process: find converged iteration from buffers
+    let convBase = convBuf.contents().assumingMemoryBound(to: Float.self)
+    let statusBase = statusSnapBuf.contents().assumingMemoryBound(to: Int32.self)
+    let snapBase = snapBuf.contents().assumingMemoryBound(to: Float.self)
+    var nIter: Int32 = 0
+    var convergedAt = -1
+
+    for it in 0..<maxIter {
+        guard statusBase[it] == 0 else { break }
+        nIter = Int32(it + 1)
+
+        let base = it * convEntries
+        var stepSq: Float = 0
+        var wSq: Float = 0
+        for j in 0..<ng {
+            stepSq += convBase[base + j]
+            wSq += convBase[base + ng + j]
+        }
+        let stepNorm = sqrt(stepSq)
+        let wNorm = sqrt(wSq)
+
+        if stepNorm < tol * max(1.0, wNorm) {
+            convergedAt = it
+            break
+        }
     }
 
     let coefOut = coef_out.assumingMemoryBound(to: Float.self)
-    let wFinal = wBuffer.contents().assumingMemoryBound(to: Float.self)
-    memcpy(coefOut, wFinal, pSize)
+    if convergedAt >= 0 {
+        memcpy(coefOut, snapBase + convergedAt * p, pSize)
+    } else if nIter > 0 {
+        memcpy(coefOut, snapBase + (Int(nIter) - 1) * p, pSize)
+    }
     n_iter_out?.pointee = nIter
+    ctx.recycleBuffer(convBuf)
+    ctx.recycleBuffer(snapBuf)
+    ctx.recycleBuffer(statusSnapBuf)
     return 0
 }
 
@@ -358,58 +451,23 @@ public func skmetal_logreg_lbfgs_fit(
         return loss
     }
 
-    // Helper: compute just loss for line search (w already on GPU)
-    // Returns loss = Σ(log loss)/n + (α/2)·||w||²
-    func computeLossAt(w: [Float]) -> Float {
-        // Copy w to GPU
-        for i in 0..<p { wPtr[i] = w[i] }
-        // lin = X @ w
-        let cb = ctx.commandQueue.makeCommandBuffer()!
-        let gemmLin = MPSMatrixMultiplication(
-            device: ctx.device, transposeLeft: false, transposeRight: false,
-            resultRows: n, resultColumns: 1, interiorColumns: p,
-            alpha: 1.0, beta: 0.0)
-        gemmLin.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
-
-        if let pipeline = ctx.getPipeline(name: "log_loss_binary", functionName: "log_loss_binary") {
-            let enc = cb.makeComputeCommandEncoder()!
-            enc.setComputePipelineState(pipeline)
-            enc.setBuffer(linBuffer, offset: 0, index: 0)
-            enc.setBuffer(yBuffer, offset: 0, index: 1)
-            enc.setBuffer(lossBuf, offset: 0, index: 2)
-            var nU = UInt32(n)
-            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-            enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
-                                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            enc.endEncoding()
-        }
-
-        let ng = max(1, (n + 255) / 256)
-        if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
-            let enc = cb.makeComputeCommandEncoder()!
-            enc.setComputePipelineState(rsPpl)
-            enc.setBuffer(lossBuf, offset: 0, index: 0)
-            enc.setBuffer(sumBuf, offset: 0, index: 1)
-            var nU = UInt32(n); var ngU = UInt32(ng)
-            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
-            enc.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 3)
-            enc.dispatchThreadgroups(MTLSize(width: ng, height: 1, depth: 1),
-                                     threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            enc.endEncoding()
-        }
-        cb.commit()
-        cb.waitUntilCompleted()
-
-        var loss = Float(0)
-        for i in 0..<ng { loss += sumPtr[i] }
-        loss /= Float(n)
-        if alpha != 0 {
-            var wNorm2: Float = 0
-            for i in 0..<p { wNorm2 += w[i] * w[i] }
-            loss += Float(0.5) * alphaN * wNorm2
-        }
-        return loss
+    // Line search buffers (reused across main iterations)
+    let maxTrials = 20
+    let trialBufSize = maxTrials * pSize
+    let lsNg = max(1, (n + 255) / 256)
+    let lsConvBufSize = maxTrials * lsNg * fs
+    guard let trialWbuf = ctx.device.makeBuffer(length: trialBufSize, options: .storageModeShared),
+          let lsConvBuf = ctx.device.makeBuffer(length: lsConvBufSize, options: .storageModeShared),
+          let logLossPpl = ctx.getPipeline(name: "log_loss_binary", functionName: "log_loss_binary"),
+          let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") else {
+        return 1
     }
+    let lsTg256 = MTLSize(width: 256, height: 1, depth: 1)
+    let lsNgSize = MTLSize(width: lsNg, height: 1, depth: 1)
+    let gemmLinLS = MPSMatrixMultiplication(
+        device: ctx.device, transposeLeft: false, transposeRight: false,
+        resultRows: n, resultColumns: 1, interiorColumns: p,
+        alpha: 1.0, beta: 0.0)
 
     // ------ Main L-BFGS loop ------
     var loss = computeGradientLoss()  // initial gradient + loss
@@ -472,20 +530,78 @@ public func skmetal_logreg_lbfgs_fit(
         for j in 0..<p { gd += gCpu[j] * d[j] }
         if gd >= 0 { break }  // not a descent direction
 
-        // Backtracking Armijo line search
-        var step: Float = 1.0
+        // Fused line search: encode ALL 20 trials in 1 command buffer
         let c1: Float = 1e-4
+        var step = Float(1.0)
         var wTrial = [Float](repeating: 0, count: p)
-        var lossTrial: Float = 0
+        var wNorm2Trials = [Float](repeating: 0, count: maxTrials)
+        var trialSteps = [Float](repeating: 0, count: maxTrials)
+        var nTrials = 0
+        let trialFPtr = trialWbuf.contents().assumingMemoryBound(to: Float.self)
+
+        for t in 0..<maxTrials {
+            trialSteps[t] = step
+            for j in 0..<p {
+                let val = wCpu[j] + step * d[j]
+                wTrial[j] = val
+                trialFPtr[t * p + j] = val
+            }
+            var wNorm2V: Float = 0
+            for j in 0..<p { wNorm2V += wTrial[j] * wTrial[j] }
+            wNorm2Trials[t] = wNorm2V
+            nTrials = t + 1
+            step *= 0.5
+        }
+
+        let lsCB = ctx.commandQueue.makeCommandBuffer()!
+        for t in 0..<nTrials {
+            let copyBlit = lsCB.makeBlitCommandEncoder()!
+            copyBlit.copy(from: trialWbuf, sourceOffset: t * pSize,
+                          to: wBuffer, destinationOffset: 0,
+                          size: pSize)
+            copyBlit.endEncoding()
+
+            gemmLinLS.encode(commandBuffer: lsCB, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
+
+            let encLoss = lsCB.makeComputeCommandEncoder()!
+            encLoss.setComputePipelineState(logLossPpl)
+            encLoss.setBuffer(linBuffer, offset: 0, index: 0)
+            encLoss.setBuffer(yBuffer, offset: 0, index: 1)
+            encLoss.setBuffer(lossBuf, offset: 0, index: 2)
+            var nU = UInt32(n)
+            encLoss.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+            encLoss.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                                    threadsPerThreadgroup: lsTg256)
+            encLoss.endEncoding()
+
+            let encRed = lsCB.makeComputeCommandEncoder()!
+            encRed.setComputePipelineState(rsPpl)
+            encRed.setBuffer(lossBuf, offset: 0, index: 0)
+            encRed.setBuffer(lsConvBuf, offset: t * lsNg * fs, index: 1)
+            var nU32 = UInt32(n)
+            var ngU32 = UInt32(lsNg)
+            encRed.setBytes(&nU32, length: MemoryLayout<UInt32>.stride, index: 2)
+            encRed.setBytes(&ngU32, length: MemoryLayout<UInt32>.stride, index: 3)
+            encRed.dispatchThreadgroups(lsNgSize, threadsPerThreadgroup: lsTg256)
+            encRed.endEncoding()
+        }
+
+        lsCB.commit()
+        lsCB.waitUntilCompleted()
+
+        let lsConvPtr = lsConvBuf.contents().assumingMemoryBound(to: Float.self)
         var accepted = false
-        for _ in 0..<20 {
-            for j in 0..<p { wTrial[j] = wCpu[j] + step * d[j] }
-            lossTrial = computeLossAt(w: wTrial)
-            if lossTrial <= loss + c1 * step * gd {
+        for t in 0..<nTrials {
+            var lossSum: Float = 0
+            for j in 0..<lsNg { lossSum += lsConvPtr[t * lsNg + j] }
+            let lossTrial = lossSum / Float(n) + Float(0.5) * alphaN * wNorm2Trials[t]
+            if lossTrial <= loss + c1 * trialSteps[t] * gd {
+                for j in 0..<p { wCpu[j] = trialFPtr[t * p + j] }
+                loss = lossTrial
+                step = trialSteps[t]
                 accepted = true
                 break
             }
-            step *= 0.5
         }
         if !accepted { break }
 
@@ -847,20 +963,100 @@ public func skmetal_multinomial_lbfgs_fit(
         for j in 0..<totalParams { gd += gCpu[j] * d[j] }
         if gd >= 0 { break }
 
+        let maxTrialSteps = 20
+        var trialSteps = [Float](repeating: 1.0, count: maxTrialSteps)
+        var wTrials = [[Float]](repeating: [Float](repeating: 0, count: totalParams), count: maxTrialSteps)
         var step: Float = 1.0
+        for t in 0..<maxTrialSteps {
+            trialSteps[t] = step
+            for j in 0..<totalParams { wTrials[t][j] = wCpu[j] + step * d[j] }
+            step *= 0.5
+        }
+
+        let trialNg = max(1, (n + 255) / 256)
+        let trialBufSize = maxTrialSteps * trialNg * fs
+        let trialWSize = maxTrialSteps * totalParams * fs
+        guard let trialSumBuf = ctx.reusableBuffer(length: trialBufSize) else { return 1 }
+        let trialWBuffer = ctx.device.makeBuffer(length: trialWSize, options: .storageModeShared)
+        guard trialWBuffer != nil else { return 1 }
+        let trialWBase = trialWBuffer!.contents().assumingMemoryBound(to: Float.self)
+        var wNorms2 = [Float](repeating: 0, count: maxTrialSteps)
+        for t in 0..<maxTrialSteps {
+            var wn2: Float = 0
+            for j in 0..<totalParams {
+                trialWBase[t * totalParams + j] = wTrials[t][j]
+                wn2 += wTrials[t][j] * wTrials[t][j]
+            }
+            wNorms2[t] = wn2
+        }
+
+        let trialCB = ctx.commandQueue.makeCommandBuffer()!
+        for t in 0..<maxTrialSteps {
+            let blit = trialCB.makeBlitCommandEncoder()!
+            blit.copy(from: trialWBuffer!, sourceOffset: t * totalParams * fs,
+                      to: wBuffer, destinationOffset: 0, size: totalParams * fs)
+            blit.endEncoding()
+
+            let gemm = MPSMatrixMultiplication(
+                device: ctx.device, transposeLeft: false, transposeRight: false,
+                resultRows: n, resultColumns: n_classes, interiorColumns: p,
+                alpha: 1.0, beta: 0.0)
+            gemm.encode(commandBuffer: trialCB, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixScores)
+
+            let softmax = MPSMatrixSoftMax(device: ctx.device)
+            softmax.sourceRows = n; softmax.sourceColumns = n_classes
+            softmax.encode(commandBuffer: trialCB, inputMatrix: matrixScores, resultMatrix: matrixProb)
+
+            if let pipeline = ctx.getPipeline(name: "cross_entropy_loss", functionName: "cross_entropy_loss") {
+                let enc = trialCB.makeComputeCommandEncoder()!
+                enc.setComputePipelineState(pipeline)
+                enc.setBuffer(probBuffer, offset: 0, index: 0)
+                enc.setBuffer(yBuffer, offset: 0, index: 1)
+                enc.setBuffer(lossBuf, offset: 0, index: 2)
+                var nU = UInt32(n); var cU = UInt32(n_classes)
+                enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+                enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
+                enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
+                                    threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+                enc.endEncoding()
+            }
+
+            if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
+                let enc = trialCB.makeComputeCommandEncoder()!
+                enc.setComputePipelineState(rsPpl)
+                enc.setBuffer(lossBuf, offset: 0, index: 0)
+                enc.setBuffer(trialSumBuf, offset: t * trialNg * fs, index: 1)
+                var nU = UInt32(n); var ngU = UInt32(trialNg)
+                enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+                enc.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 3)
+                enc.dispatchThreadgroups(MTLSize(width: trialNg, height: 1, depth: 1),
+                                         threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+                enc.endEncoding()
+            }
+        }
+        trialCB.commit()
+        trialCB.waitUntilCompleted()
+
+        let trialSumBase = trialSumBuf.contents().assumingMemoryBound(to: Float.self)
         let c1: Float = 1e-4
         var wTrial = [Float](repeating: 0, count: totalParams)
         var lossTrial: Float = 0
         var accepted = false
-        for _ in 0..<20 {
-            for j in 0..<totalParams { wTrial[j] = wCpu[j] + step * d[j] }
-            lossTrial = computeLossAt(w: wTrial)
-            if lossTrial <= loss + c1 * step * gd {
+        for t in 0..<maxTrialSteps {
+            var ceLoss: Float = 0
+            for i in 0..<trialNg { ceLoss += trialSumBase[t * trialNg + i] }
+            ceLoss /= Float(n)
+            lossTrial = ceLoss
+            if alpha != 0 {
+                lossTrial += Float(0.5) * alphaN * Float(n) * wNorms2[t]
+            }
+            if lossTrial <= loss + c1 * trialSteps[t] * gd {
+                for j in 0..<totalParams { wTrial[j] = wTrials[t][j] }
                 accepted = true
                 break
             }
-            step *= 0.5
         }
+        ctx.recycleBuffer(trialSumBuf)
         if !accepted { break }
 
         let idx = it % m
@@ -892,318 +1088,4 @@ public func skmetal_multinomial_lbfgs_fit(
     return 0
 }
 
-// MARK: - IRLS fit: full multinomial LogisticRegression loop in Swift
 
-@_cdecl("skmetal_multinomial_irls_fit")
-public func skmetal_multinomial_irls_fit(
-    X: UnsafeRawPointer,
-    y: UnsafeRawPointer,
-    W_out: UnsafeMutableRawPointer,
-    C: Float,
-    tol: Float,
-    max_iter: Int32,
-    n: Int,
-    p: Int,
-    n_classes: Int,
-    n_iter_out: UnsafeMutablePointer<Int32>?
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let fs = MemoryLayout<Float>.stride
-    let xSize = n * p * fs
-    let wSize = p * n_classes * fs
-    let scoresSize = n * n_classes * fs
-    let pPacked = Int(p) * (Int(p) + 1) / 2
-    let hessiansSize = pPacked * n_classes * fs
-
-    let alpha: Float = 1.0 / C
-
-    guard let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
-          let yBuffer = wrapInput(y, length: n * fs, device: ctx.device) else {
-        return 1
-    }
-
-    let wBackBuffer = ctx.device.makeBuffer(length: wSize, options: .storageModeShared)
-    guard let wBuffer = ctx.device.makeBuffer(length: wSize, options: .storageModeShared),
-          let scoresBuffer = ctx.device.makeBuffer(length: scoresSize, options: .storageModeShared),
-          let probBuffer = ctx.device.makeBuffer(length: scoresSize, options: .storageModeShared),
-          let resBuffer = ctx.device.makeBuffer(length: scoresSize, options: .storageModeShared),
-          let gBuffer = ctx.device.makeBuffer(length: wSize, options: .storageModeShared),
-          let hBuffer = ctx.device.makeBuffer(length: hessiansSize, options: .storageModeShared),
-          let dBuffer = ctx.device.makeBuffer(length: wSize, options: .storageModeShared),
-          let gradBatchBuffer = ctx.device.makeBuffer(length: n_classes * p * fs, options: .storageModeShared) else {
-        return 1
-    }
-
-    memset(wBuffer.contents(), 0, wSize)
-    let wBack = wBackBuffer!.contents().assumingMemoryBound(to: Float.self)
-
-    let rowBytesX = p * fs
-    let rowBytesC = n_classes * fs
-
-    let descX = MPSMatrixDescriptor(dimensions: n, columns: p, rowBytes: rowBytesX, dataType: .float32)
-    let descW = MPSMatrixDescriptor(dimensions: p, columns: n_classes, rowBytes: rowBytesC, dataType: .float32)
-    let descScores = MPSMatrixDescriptor(dimensions: n, columns: n_classes, rowBytes: rowBytesC, dataType: .float32)
-    let descRes = MPSMatrixDescriptor(dimensions: n, columns: n_classes, rowBytes: rowBytesC, dataType: .float32)
-    let descG = MPSMatrixDescriptor(dimensions: p, columns: n_classes, rowBytes: rowBytesC, dataType: .float32)
-
-    let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
-    let matrixW = MPSMatrix(buffer: wBuffer, descriptor: descW)
-    let matrixScores = MPSMatrix(buffer: scoresBuffer, descriptor: descScores)
-    let matrixProb = MPSMatrix(buffer: probBuffer, descriptor: descScores)
-    let matrixRes = MPSMatrix(buffer: resBuffer, descriptor: descRes)
-    let matrixG = MPSMatrix(buffer: gBuffer, descriptor: descG)
-
-    let maxIter = Int(max_iter)
-    var nIter: Int32 = 0
-    let p32 = Int32(p)
-
-    for it in 0..<maxIter {
-        nIter = Int32(it + 1)
-        let cb = ctx.commandQueue.makeCommandBuffer()!
-
-        let gemmXW = MPSMatrixMultiplication(
-            device: ctx.device, transposeLeft: false, transposeRight: false,
-            resultRows: n, resultColumns: n_classes, interiorColumns: p,
-            alpha: 1.0, beta: 0.0)
-        gemmXW.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixScores)
-
-        let softmax = MPSMatrixSoftMax(device: ctx.device)
-        softmax.sourceRows = n
-        softmax.sourceColumns = n_classes
-        softmax.encode(commandBuffer: cb, inputMatrix: matrixScores, resultMatrix: matrixProb)
-
-        if let pipeline = ctx.getPipeline(name: "softmax_residual", functionName: "softmax_residual") {
-            let enc = cb.makeComputeCommandEncoder()!
-            enc.setComputePipelineState(pipeline)
-            enc.setBuffer(probBuffer, offset: 0, index: 0)
-            enc.setBuffer(yBuffer, offset: 0, index: 1)
-            enc.setBuffer(resBuffer, offset: 0, index: 2)
-            var nU = UInt32(n); var cU = UInt32(n_classes)
-            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-            enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
-            let tgSize = MTLSize(width: 16, height: 16, depth: 1)
-            let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (n + 15) / 16, depth: 1)
-            enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
-            enc.endEncoding()
-        }
-
-        let gemmGrad = MPSMatrixMultiplication(
-            device: ctx.device, transposeLeft: true, transposeRight: false,
-            resultRows: p, resultColumns: n_classes, interiorColumns: n,
-            alpha: 1.0, beta: 0.0)
-        gemmGrad.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixRes, resultMatrix: matrixG)
-
-        if let pipeline = ctx.getPipeline(name: "multinomial_hessians", functionName: "multinomial_hessians") {
-            let enc = cb.makeComputeCommandEncoder()!
-            enc.setComputePipelineState(pipeline)
-            enc.setBuffer(xBuffer, offset: 0, index: 0)
-            enc.setBuffer(probBuffer, offset: 0, index: 1)
-            enc.setBuffer(hBuffer, offset: 0, index: 2)
-            var a = alpha
-            enc.setBytes(&a, length: fs, index: 3)
-            var nU = UInt32(n); var pU = UInt32(p); var cU = UInt32(n_classes)
-            enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 4)
-            enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 5)
-            enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 6)
-            let pPackedSize = Int(p) * (Int(p) + 1) / 2
-            let tgSize = MTLSize(width: 256, height: 1, depth: 1)
-            let tgCount = MTLSize(width: (pPackedSize + 255) / 256, height: n_classes, depth: 1)
-            enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
-            enc.endEncoding()
-        }
-
-        if let pipeline = ctx.getPipeline(name: "transpose_f32", functionName: "transpose_f32") {
-            let enc = cb.makeComputeCommandEncoder()!
-            enc.setComputePipelineState(pipeline)
-            enc.setBuffer(gBuffer, offset: 0, index: 0)
-            enc.setBuffer(gradBatchBuffer, offset: 0, index: 1)
-            var rowsU = UInt32(p); var colsU = UInt32(n_classes)
-            enc.setBytes(&rowsU, length: MemoryLayout<UInt32>.stride, index: 2)
-            enc.setBytes(&colsU, length: MemoryLayout<UInt32>.stride, index: 3)
-            let tgSize = MTLSize(width: 16, height: 16, depth: 1)
-            let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (p + 15) / 16, depth: 1)
-            enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
-            enc.endEncoding()
-        }
-
-        if alpha != 0 {
-            if let pipeline = ctx.getPipeline(name: "multinomial_grad_l2", functionName: "multinomial_grad_l2") {
-                let enc = cb.makeComputeCommandEncoder()!
-                enc.setComputePipelineState(pipeline)
-                enc.setBuffer(gradBatchBuffer, offset: 0, index: 0)
-                enc.setBuffer(wBuffer, offset: 0, index: 1)
-                var a = alpha
-                enc.setBytes(&a, length: fs, index: 2)
-                var pU = UInt32(p); var cU = UInt32(n_classes)
-                enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
-                enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
-                let tgSize = MTLSize(width: 16, height: 16, depth: 1)
-                let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (p + 15) / 16, depth: 1)
-                enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
-                enc.endEncoding()
-            }
-        }
-
-        cb.commit()
-        cb.waitUntilCompleted()
-
-        let hBase = hBuffer.contents().assumingMemoryBound(to: Float.self)
-        let gBase = gradBatchBuffer.contents().assumingMemoryBound(to: Float.self)
-        let dBase = dBuffer.contents().assumingMemoryBound(to: Float.self)
-        let wPtr = wBuffer.contents().assumingMemoryBound(to: Float.self)
-
-        // Save gradient norm BEFORE Cholesky solve overwrites gBase with step.
-        // Gradient is unscaled (O(n)), so multiply tol by n to match sklearn convention.
-        let gradNorm = cblas_snrm2(p32 * Int32(n_classes), gBase, 1)
-        let wNorm = cblas_snrm2(p32 * Int32(n_classes), wPtr, 1)
-
-        // Check for NaN/Inf in scores and bail early
-        let sFloats = scoresBuffer.contents().assumingMemoryBound(to: Float.self)
-        for i in 0..<(n * n_classes) {
-            if sFloats[i].isNaN || sFloats[i].isInfinite { return 2 }
-        }
-
-        var uplo: CChar = 76
-        var info: Int32 = 0
-        var nrhs_ = Int32(1), ldb_ = p32
-        for c in 0..<n_classes {
-            let hOff = c * pPacked
-            let gOff = c * p
-            let hPtr = hBase.advanced(by: hOff)
-            let gPtr = gBase.advanced(by: gOff)
-            var n_ = p32
-            spptrf_(&uplo, &n_, hPtr, &info)
-            if info != 0 {
-                let msg = String(format: "iter=%d class=%d spptrf failed info=%d", nIter, c, info)
-                msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
-                return 1
-            }
-            spptrs_(&uplo, &n_, &nrhs_, hPtr, gPtr, &ldb_, &info)
-            if info != 0 {
-                let msg = String(format: "iter=%d class=%d spptrs failed info=%d", nIter, c, info)
-                msg.withCString { fputs($0, stderr); fputs("\n", stderr) }
-                return 1
-            }
-        }
-
-        for c in 0..<n_classes {
-            for i in 0..<p {
-                dBase[i * n_classes + c] = gBase[c * p + i]
-            }
-        }
-
-        // Clip Newton step norm to prevent blowup from near-singular Hessians
-        let maxStep: Float = 10.0 * powf(Float(p * n_classes), 0.25)
-        let stepNorm = cblas_snrm2(p32 * Int32(n_classes), dBase, 1)
-        if stepNorm > maxStep {
-            let scale = maxStep / stepNorm
-            cblas_sscal(p32 * Int32(n_classes), scale, dBase, 1)
-        }
-
-        // Gradient is O(n) (no 1/n scaling), so scale tol by n
-        if gradNorm < tol * Float(n) * max(1.0, wNorm) { break }
-
-        // ---- Backtracking line search ----
-        // Save current W to restore on backtrack
-        memcpy(wBack, wPtr, wSize)
-        let gradNormOld = gradNorm
-        var stepSize: Float = 1.0
-        var accepted = false
-
-        for _ in 0..<8 {
-            // Restore W and apply step: W_new = W_old - stepSize * d
-            memcpy(wPtr, wBack, wSize)
-            cblas_saxpy(p32 * Int32(n_classes), -stepSize, dBase, 1, wPtr, 1)
-
-            // Forward pass to compute gradient at W_new (no Hessian)
-            let cb2 = ctx.commandQueue.makeCommandBuffer()!
-
-            let gemm2 = MPSMatrixMultiplication(
-                device: ctx.device, transposeLeft: false, transposeRight: false,
-                resultRows: n, resultColumns: n_classes, interiorColumns: p,
-                alpha: 1.0, beta: 0.0)
-            gemm2.encode(commandBuffer: cb2, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixScores)
-
-            let softmax2 = MPSMatrixSoftMax(device: ctx.device)
-            softmax2.sourceRows = n
-            softmax2.sourceColumns = n_classes
-            softmax2.encode(commandBuffer: cb2, inputMatrix: matrixScores, resultMatrix: matrixProb)
-
-            if let pipeline = ctx.getPipeline(name: "softmax_residual", functionName: "softmax_residual") {
-                let enc = cb2.makeComputeCommandEncoder()!
-                enc.setComputePipelineState(pipeline)
-                enc.setBuffer(probBuffer, offset: 0, index: 0)
-                enc.setBuffer(yBuffer, offset: 0, index: 1)
-                enc.setBuffer(resBuffer, offset: 0, index: 2)
-                var nU = UInt32(n); var cU = UInt32(n_classes)
-                enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-                enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
-                let tgSize = MTLSize(width: 16, height: 16, depth: 1)
-                let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (n + 15) / 16, depth: 1)
-                enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
-                enc.endEncoding()
-            }
-
-            let gemmGrad2 = MPSMatrixMultiplication(
-                device: ctx.device, transposeLeft: true, transposeRight: false,
-                resultRows: p, resultColumns: n_classes, interiorColumns: n,
-                alpha: 1.0, beta: 0.0)
-            gemmGrad2.encode(commandBuffer: cb2, leftMatrix: matrixX, rightMatrix: matrixRes, resultMatrix: matrixG)
-
-            if let pipeline = ctx.getPipeline(name: "transpose_f32", functionName: "transpose_f32") {
-                let enc = cb2.makeComputeCommandEncoder()!
-                enc.setComputePipelineState(pipeline)
-                enc.setBuffer(gBuffer, offset: 0, index: 0)
-                enc.setBuffer(gradBatchBuffer, offset: 0, index: 1)
-                var rowsU = UInt32(p); var colsU = UInt32(n_classes)
-                enc.setBytes(&rowsU, length: MemoryLayout<UInt32>.stride, index: 2)
-                enc.setBytes(&colsU, length: MemoryLayout<UInt32>.stride, index: 3)
-                let tgSize = MTLSize(width: 16, height: 16, depth: 1)
-                let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (p + 15) / 16, depth: 1)
-                enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
-                enc.endEncoding()
-            }
-
-            if alpha != 0 {
-                if let pipeline = ctx.getPipeline(name: "multinomial_grad_l2", functionName: "multinomial_grad_l2") {
-                    let enc = cb2.makeComputeCommandEncoder()!
-                    enc.setComputePipelineState(pipeline)
-                    enc.setBuffer(gradBatchBuffer, offset: 0, index: 0)
-                    enc.setBuffer(wBuffer, offset: 0, index: 1)
-                    var a = alpha
-                    enc.setBytes(&a, length: fs, index: 2)
-                    var pU = UInt32(p); var cU = UInt32(n_classes)
-                    enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
-                    enc.setBytes(&cU, length: MemoryLayout<UInt32>.stride, index: 4)
-                    let tgSize = MTLSize(width: 16, height: 16, depth: 1)
-                    let tgCount = MTLSize(width: (n_classes + 15) / 16, height: (p + 15) / 16, depth: 1)
-                    enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
-                    enc.endEncoding()
-                }
-            }
-
-            cb2.commit()
-            cb2.waitUntilCompleted()
-
-            let gNew = gradBatchBuffer.contents().assumingMemoryBound(to: Float.self)
-            let gNormNew = cblas_snrm2(p32 * Int32(n_classes), gNew, 1)
-
-            if gNormNew < gradNormOld {
-                accepted = true
-                break
-            }
-            stepSize *= 0.5
-        }
-
-        if !accepted {
-            // All backtrack attempts failed: restore old W (no update this iteration)
-            memcpy(wPtr, wBack, wSize)
-        }
-    }
-
-    let wOut = W_out.assumingMemoryBound(to: Float.self)
-    let wFinal = wBuffer.contents().assumingMemoryBound(to: Float.self)
-    memcpy(wOut, wFinal, wSize)
-    n_iter_out?.pointee = nIter
-    return 0
-}

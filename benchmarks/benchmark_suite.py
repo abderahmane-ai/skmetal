@@ -1,15 +1,19 @@
 """Benchmark suite for skmetal GPU acceleration."""
 
+import sys
 import time
 import json
-import numpy as np
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skmetal"))
+
+import numpy as np
 from sklearn.datasets import make_regression, make_classification, make_blobs
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression
 from sklearn.decomposition import TruncatedSVD
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-import skmetal
+from skmetal import accelerate
 
 
 def benchmark(name, est_factory, data_factory, n_runs=3):
@@ -21,7 +25,7 @@ def benchmark(name, est_factory, data_factory, n_runs=3):
     cpu = est_factory()
     cpu.fit(*args)
 
-    gpu = skmetal.accelerate(est_factory())
+    gpu = accelerate(est_factory())
     gpu.fit(*args)
 
     cpu_t = []
@@ -33,7 +37,7 @@ def benchmark(name, est_factory, data_factory, n_runs=3):
 
     gpu_t = []
     for _ in range(n_runs):
-        g = skmetal.accelerate(est_factory())
+        g = accelerate(est_factory())
         t0 = time.perf_counter()
         g.fit(*args)
         gpu_t.append(time.perf_counter() - t0)

@@ -50,17 +50,6 @@ kernel void axpy(
     a[tid] += alpha * b[tid];
 }
 
-// L2 norm squared of a vector
-kernel void norm_sq(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint& n [[buffer(2)]],
-    uint tid [[thread_position_in_grid]]
-) {
-    if (tid >= n) return;
-    output[tid] = input[tid] * input[tid];
-}
-
 // Transpose f32 matrix (row-major ↔ column-major)
 // Each thread copies one element: gid.x = col, gid.y = row
 kernel void transpose_f32(
@@ -204,35 +193,24 @@ kernel void svc_predict_binary(
     float s = 0.0f;
     for (uint k = 0; k < n_sv; k++) {
         float d2 = 0.0f;
-        for (uint l = 0; l < d; l++) {
-            float diff = X_test[tid * d + l] - X_sv[k * d + l];
+        uint base_test = tid * d;
+        uint base_sv = k * d;
+        uint l = 0;
+        if (d >= 4) {
+            for (; l + 4 <= d; l += 4) {
+                float4 vx = *reinterpret_cast<device const float4*>(X_test + base_test + l);
+                float4 vs = *reinterpret_cast<device const float4*>(X_sv + base_sv + l);
+                float4 diff = vx - vs;
+                d2 += diff.x * diff.x + diff.y * diff.y + diff.z * diff.z + diff.w * diff.w;
+            }
+        }
+        for (; l < d; l++) {
+            float diff = X_test[base_test + l] - X_sv[base_sv + l];
             d2 += diff * diff;
         }
         s += dual_coef[k] * exp(-gamma * d2);
     }
     decisions[tid] = s + intercept[0];
-}
-
-// Convert float32 buffer to float16
-kernel void convert_f32_to_f16(
-    device const float* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint& n [[buffer(2)]],
-    uint tid [[thread_position_in_grid]]
-) {
-    if (tid >= n) return;
-    output[tid] = half(input[tid]);
-}
-
-// Convert float16 buffer back to float32
-kernel void convert_f16_to_f32(
-    device const half* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint& n [[buffer(2)]],
-    uint tid [[thread_position_in_grid]]
-) {
-    if (tid >= n) return;
-    output[tid] = float(input[tid]);
 }
 
 // Add scalar to diagonal of a square matrix (L2 regularization for Ridge/IRLS)

@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-constant uint BLOCK_COLS = 8;
+constant uint BLOCK_COLS = 16;
 
 // Compute mean of each column of X (tall-skinny, n >> p).
 // Tiled column approach: each threadgroup processes BLOCK_COLS columns,
@@ -35,17 +35,31 @@ kernel void column_means(
         }
     }
 
-    threadgroup float tg_shared[2048];
-
+    // Level 1: SIMD-group sum via simd_sum
     for (uint b = 0; b < active_cols; b++) {
-        tg_shared[b * lsz + lid] = local_sum[b];
+        local_sum[b] = simd_sum(local_sum[b]);
+    }
+
+    // Level 2: SIMD group 0 writes per-column results to threadgroup
+    uint lane_id = lid & 31;
+    uint num_simd_groups = (lsz + 31) / 32;
+    threadgroup float tg_shared[512];
+
+    if (lane_id == 0) {
+        uint sg_idx = lid >> 5;
+        if (sg_idx < num_simd_groups) {
+            for (uint b = 0; b < active_cols; b++) {
+                tg_shared[b * num_simd_groups + sg_idx] = local_sum[b];
+            }
+        }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (uint stride = lsz >> 1; stride > 0; stride >>= 1) {
+    // Level 3: tree-reduce per column across SIMD groups
+    for (uint stride = num_simd_groups >> 1; stride > 0; stride >>= 1) {
         if (lid < stride) {
             for (uint b = 0; b < active_cols; b++) {
-                tg_shared[b * lsz + lid] += tg_shared[b * lsz + lid + stride];
+                tg_shared[b * num_simd_groups + lid] += tg_shared[b * num_simd_groups + lid + stride];
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -53,7 +67,7 @@ kernel void column_means(
 
     if (lid == 0) {
         for (uint b = 0; b < active_cols; b++) {
-            means[col_start + b] = tg_shared[b * lsz] / (float)n;
+            means[col_start + b] = tg_shared[b * num_simd_groups] / (float)n;
         }
     }
 }

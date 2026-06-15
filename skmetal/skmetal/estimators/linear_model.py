@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import gemm, ridge_fit_solve, linear_solve, logreg_irls_fit, logreg_lbfgs_fit, multinomial_lbfgs_fit, fista_fit
+from .._bridge import ridge_fit_solve, logreg_irls_fit, logreg_lbfgs_fit, multinomial_lbfgs_fit, fista_fit, gemm
 
 
 class MetalLinearRegression(BaseGPUEstimator):
@@ -11,30 +11,16 @@ class MetalLinearRegression(BaseGPUEstimator):
 
         n, p = X.shape
         fit_intercept = self._estimator.fit_intercept
+        X = X.copy()
 
-        if fit_intercept:
-            X_mean = X.mean(axis=0, dtype=np.float32)
-            y_mean = float(y.mean())
-            Xc = X - X_mean
-            yc = y - y_mean
-        else:
-            Xc = X
-            yc = y
-
-        XTX = gemm(Xc, Xc, trans_A=True)
-        XTy = gemm(Xc, yc.reshape(-1, 1), trans_A=True).ravel()
-
+        X_mean = np.empty(p, dtype=np.float32)
         coef = np.empty(p, dtype=np.float32)
-        try:
-            linear_solve(XTX.copy(), XTy.copy(), coef)
-        except RuntimeError:
-            XTX_f64 = np.array(XTX, dtype=np.float64)
-            XTy_f64 = np.array(XTy, dtype=np.float64)
-            coef[:] = np.linalg.lstsq(XTX_f64, XTy_f64, rcond=None)[0].astype(np.float32)
+
+        ridge_fit_solve(X, y, X_mean, coef, alpha=0.0)
 
         self._estimator.coef_ = coef
         if fit_intercept:
-            self._estimator.intercept_ = y_mean - X_mean @ coef
+            self._estimator.intercept_ = float(y.mean()) - X_mean @ coef
         else:
             self._estimator.intercept_ = 0.0
         self._fitted = True
@@ -44,7 +30,8 @@ class MetalLinearRegression(BaseGPUEstimator):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_predict(X)
-        return X @ self._estimator.coef_ + self._estimator.intercept_
+        w = self._estimator.coef_.reshape(-1, 1)
+        return gemm(X, w).ravel() + self._estimator.intercept_
 
 
 class MetalRidge(BaseGPUEstimator):
@@ -71,6 +58,13 @@ class MetalRidge(BaseGPUEstimator):
             self._estimator.intercept_ = 0.0
         self._fitted = True
         return self
+
+    def predict(self, X):
+        X = self._validate_data(X)[0]
+        if not self._should_use_gpu(X) or not self._fitted:
+            return self._fallback_predict(X)
+        w = self._estimator.coef_.reshape(-1, 1)
+        return gemm(X, w).ravel() + self._estimator.intercept_
 
 
 class MetalLasso(BaseGPUEstimator):
@@ -109,7 +103,8 @@ class MetalLasso(BaseGPUEstimator):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_predict(X)
-        return X @ self._estimator.coef_ + self._estimator.intercept_
+        w = self._estimator.coef_.reshape(-1, 1)
+        return gemm(X, w).ravel() + self._estimator.intercept_
 
 
 class MetalElasticNet(BaseGPUEstimator):
@@ -149,7 +144,8 @@ class MetalElasticNet(BaseGPUEstimator):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_predict(X)
-        return X @ self._estimator.coef_ + self._estimator.intercept_
+        w = self._estimator.coef_.reshape(-1, 1)
+        return gemm(X, w).ravel() + self._estimator.intercept_
 
 
 class MetalLogisticRegression(BaseGPUEstimator):
@@ -235,7 +231,8 @@ class MetalLogisticRegression(BaseGPUEstimator):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_predict(X)
-        scores = X @ self._estimator.coef_.T + self._estimator.intercept_
+        coef = self._estimator.coef_
+        scores = gemm(X, coef, trans_B=True) + self._estimator.intercept_
         if scores.shape[1] == 1:
             return self._estimator.classes_[(scores.ravel() > 0).astype(int)]
         return self._estimator.classes_[np.argmax(scores, axis=1)]
@@ -244,7 +241,8 @@ class MetalLogisticRegression(BaseGPUEstimator):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_predict_proba(X)
-        scores = X @ self._estimator.coef_.T + self._estimator.intercept_
+        coef = self._estimator.coef_
+        scores = gemm(X, coef, trans_B=True) + self._estimator.intercept_
         if scores.shape[1] == 1:
             prob = 1.0 / (1.0 + np.exp(-scores.ravel()))
             return np.column_stack([1 - prob, prob])

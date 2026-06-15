@@ -1,9 +1,46 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// Max-heap helpers for O(n log k) top-k selection.
+// Each helper operates on arrays stored in device memory (per-thread).
+
+// Push value to max-heap at position pos (0-indexed), bubble up.
+static void heap_bubble_up(device float* vals, device int* idxs, uint pos) {
+    while (pos > 0) {
+        uint parent = (pos - 1) / 2;
+        if (vals[pos] <= vals[parent]) break;
+        float tv = vals[pos]; vals[pos] = vals[parent]; vals[parent] = tv;
+        int ti = idxs[pos]; idxs[pos] = idxs[parent]; idxs[parent] = ti;
+        pos = parent;
+    }
+}
+
+// Heapify down from position pos in a max-heap of size <= heap_sz.
+static void heap_heapify_down(device float* vals, device int* idxs, uint heap_sz, uint pos) {
+    for (;;) {
+        uint largest = pos;
+        uint left = 2 * pos + 1;
+        uint right = 2 * pos + 2;
+        if (left < heap_sz && vals[left] > vals[largest]) largest = left;
+        if (right < heap_sz && vals[right] > vals[largest]) largest = right;
+        if (largest == pos) break;
+        float tv = vals[pos]; vals[pos] = vals[largest]; vals[largest] = tv;
+        int ti = idxs[pos]; idxs[pos] = idxs[largest]; idxs[largest] = ti;
+        pos = largest;
+    }
+}
+
+// Convert max-heap to ascending-sorted array (heap-sort of the valid count).
+static void heap_sort_asc(device float* vals, device int* idxs, uint count) {
+    for (uint i = count; i > 1; i--) {
+        float tv = vals[0]; vals[0] = vals[i - 1]; vals[i - 1] = tv;
+        int ti = idxs[0]; idxs[0] = idxs[i - 1]; idxs[i - 1] = ti;
+        heap_heapify_down(vals, idxs, i - 1, 0);
+    }
+}
+
 // Tile-local top-k selection for Euclidean distance.
-// Uses batch dispatch: each threadgroup processes multiple query rows.
-// Each thread handles one query row; stride by total_threads for remaining rows.
+// Uses max-heap for O(n_t log k) per query row instead of O(n_t * k) insertion sort.
 kernel void knn_select_tile_topk(
     device const float* raw_dot [[buffer(0)]],
     device const float* r_query [[buffer(1)]],
@@ -23,11 +60,7 @@ kernel void knn_select_tile_topk(
         device float* my_vals = out_vals + row * k;
         device int* my_idxs = out_idxs + row * k;
 
-        for (uint i = 0; i < k; i++) {
-            my_vals[i] = INFINITY;
-            my_idxs[i] = 0;
-        }
-
+        uint count = 0;
         float r_q = r_query[row];
         device const float* D_row = raw_dot + row * n_t;
 
@@ -35,16 +68,22 @@ kernel void knn_select_tile_topk(
             float dist = r_q + r_train[j] - 2.0f * D_row[j];
             if (dist < 0.0f) dist = 0.0f;
 
-            if (dist >= my_vals[k - 1]) continue;
-
-            uint pos = k - 1;
-            while (pos > 0 && dist < my_vals[pos - 1]) {
-                my_vals[pos] = my_vals[pos - 1];
-                my_idxs[pos] = my_idxs[pos - 1];
-                pos--;
+            if (count < k) {
+                my_vals[count] = dist;
+                my_idxs[count] = int(j);
+                heap_bubble_up(my_vals, my_idxs, count);
+                count++;
+            } else if (dist < my_vals[0]) {
+                my_vals[0] = dist;
+                my_idxs[0] = int(j);
+                heap_heapify_down(my_vals, my_idxs, k, 0);
             }
-            my_vals[pos] = dist;
-            my_idxs[pos] = int(j);
+        }
+
+        heap_sort_asc(my_vals, my_idxs, count);
+        for (uint i = count; i < k; i++) {
+            my_vals[i] = INFINITY;
+            my_idxs[i] = 0;
         }
     }
 }
@@ -153,7 +192,7 @@ kernel void knn_merge_topk(
 }
 
 // Manhattan (L1) tile-local top-k: direct L1 distance from X data.
-// No GEMM or norms needed. Batch dispatch per threadgroup.
+// Uses max-heap for O(n_t log k) selection. Batch dispatch per threadgroup.
 kernel void knn_select_tile_topk_manhattan(
     device const float* X_query [[buffer(0)]],
     device const float* X_train [[buffer(1)]],
@@ -173,33 +212,46 @@ kernel void knn_select_tile_topk_manhattan(
         device float* my_vals = out_vals + row * k;
         device int* my_idxs = out_idxs + row * k;
 
-        for (uint i = 0; i < k; i++) {
-            my_vals[i] = INFINITY;
-            my_idxs[i] = 0;
-        }
-
+        uint count = 0;
         for (uint j = 0; j < n_t; j++) {
             float dist = 0.0f;
-            for (uint dim = 0; dim < d; dim++) {
-                dist += fabs(X_query[row * d + dim] - X_train[j * d + dim]);
+            uint base_q = row * d;
+            uint base_t = j * d;
+            uint dim = 0;
+            if (d >= 4) {
+                for (; dim + 4 <= d; dim += 4) {
+                    float4 vq = *reinterpret_cast<device const float4*>(X_query + base_q + dim);
+                    float4 vt = *reinterpret_cast<device const float4*>(X_train + base_t + dim);
+                    float4 diff = vq - vt;
+                    dist += fabs(diff.x) + fabs(diff.y) + fabs(diff.z) + fabs(diff.w);
+                }
+            }
+            for (; dim < d; dim++) {
+                dist += fabs(X_query[base_q + dim] - X_train[base_t + dim]);
             }
 
-            if (dist >= my_vals[k - 1]) continue;
-
-            uint pos = k - 1;
-            while (pos > 0 && dist < my_vals[pos - 1]) {
-                my_vals[pos] = my_vals[pos - 1];
-                my_idxs[pos] = my_idxs[pos - 1];
-                pos--;
+            if (count < k) {
+                my_vals[count] = dist;
+                my_idxs[count] = int(j);
+                heap_bubble_up(my_vals, my_idxs, count);
+                count++;
+            } else if (dist < my_vals[0]) {
+                my_vals[0] = dist;
+                my_idxs[0] = int(j);
+                heap_heapify_down(my_vals, my_idxs, k, 0);
             }
-            my_vals[pos] = dist;
-            my_idxs[pos] = int(j);
+        }
+
+        heap_sort_asc(my_vals, my_idxs, count);
+        for (uint i = count; i < k; i++) {
+            my_vals[i] = INFINITY;
+            my_idxs[i] = 0;
         }
     }
 }
 
 // Cosine tile-local top-k: uses MPS dot products + precomputed row norms.
-// distance = 1 - dot / (sqrt(rq) * sqrt(rt)). Batch dispatch per threadgroup.
+// Uses max-heap for O(n_t log k) selection. Batch dispatch per threadgroup.
 kernel void knn_select_tile_topk_cosine(
     device const float* raw_dot [[buffer(0)]],
     device const float* r_query [[buffer(1)]],
@@ -219,11 +271,7 @@ kernel void knn_select_tile_topk_cosine(
         device float* my_vals = out_vals + row * k;
         device int* my_idxs = out_idxs + row * k;
 
-        for (uint i = 0; i < k; i++) {
-            my_vals[i] = INFINITY;
-            my_idxs[i] = 0;
-        }
-
+        uint count = 0;
         float rq_sqrt = sqrt(r_query[row] + 1e-10f);
         device const float* D_row = raw_dot + row * n_t;
 
@@ -231,16 +279,22 @@ kernel void knn_select_tile_topk_cosine(
             float rt_sqrt = sqrt(r_train[j] + 1e-10f);
             float dist = 1.0f - D_row[j] / (rq_sqrt * rt_sqrt);
 
-            if (dist >= my_vals[k - 1]) continue;
-
-            uint pos = k - 1;
-            while (pos > 0 && dist < my_vals[pos - 1]) {
-                my_vals[pos] = my_vals[pos - 1];
-                my_idxs[pos] = my_idxs[pos - 1];
-                pos--;
+            if (count < k) {
+                my_vals[count] = dist;
+                my_idxs[count] = int(j);
+                heap_bubble_up(my_vals, my_idxs, count);
+                count++;
+            } else if (dist < my_vals[0]) {
+                my_vals[0] = dist;
+                my_idxs[0] = int(j);
+                heap_heapify_down(my_vals, my_idxs, k, 0);
             }
-            my_vals[pos] = dist;
-            my_idxs[pos] = int(j);
+        }
+
+        heap_sort_asc(my_vals, my_idxs, count);
+        for (uint i = count; i < k; i++) {
+            my_vals[i] = INFINITY;
+            my_idxs[i] = 0;
         }
     }
 }

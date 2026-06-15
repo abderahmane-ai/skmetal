@@ -4,20 +4,20 @@ import threading
 
 
 PER_ESTIMATOR_THRESHOLDS = {
-    # --- GPU winners (benchmarked at 100K × 200) ---
-    "StandardScaler":    (1_000,   10),    # 7.27× GPU
-    "LinearRegression":  (50_000,  50),    # 5.19× GPU
-    "TruncatedSVD":      (5_000,   20),    # 4.95× GPU
-    "ElasticNet":        (50_000,  50),    # 1.53× GPU
-    "Lasso":             (50_000,  50),    # 1.40× GPU
-    "LogisticRegression":(500_000, 500),   # 0.93× tied at 100K×200; likely wins for p>500
+    # --- GPU winners (benchmarked at 200K×500 / 100K×200 / 1M×100) ---
+    "StandardScaler":    (1_000,   10),    # 6.05× GPU (1M×100)
+    "LinearRegression":  (50_000,  50),    # 8.15× GPU (200K×500)
+    "TruncatedSVD":      (5_000,   20),    # 3.59× GPU (100K×500)
+    "ElasticNet":        (50_000,  50),    # 1.53× GPU (100K×200)
+    "Lasso":             (50_000,  50),    # 1.40× GPU (100K×200)
+    "LogisticRegression":(500_000, 500),   # 0.92× tied; likely wins for p>500
 
-    # --- CPU wins at 100K × 200 (keep on CPU) ---
-    "Ridge":             (10_000_000, 10_000),  # 0.72× CPU (Accelerate sub-ms, dispatch overhead kills GPU)
-    "MinMaxScaler":      (500_000, 10),    # 0.72× CPU
-    "KNeighborsClassifier":  (5_000_000, 10_000),  # 0.62× CPU
+    # --- CPU wins at benchmark sizes (keep on CPU) ---
+    "Ridge":             (10_000_000, 10_000),  # 0.91× CPU (Accelerate sub-ms, dispatch overhead)
+    "MinMaxScaler":      (500_000, 10),    # 1.11× GPU (1M×100) — marginal, high threshold
+    "KNeighborsClassifier":  (5_000_000, 10_000),  # 0.62× CPU (100K×200)
     "KNeighborsRegressor":   (5_000_000, 10_000),  # 0.62× CPU (same kernel)
-    "KMeans":            (5_000_000, 5_000),  # 0.24× CPU (skmetal GPU kernel not competitive)
+    "KMeans":            (10_000,   10),    # 0.67× CPU on Apple GPU; 94-517× via MLX backend (M3 Ultra)
 
     # --- Conservative defaults (not benchmarked) ---
     "RobustScaler":      (100_000, 10),

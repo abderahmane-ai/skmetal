@@ -1,42 +1,58 @@
 [
   {
     "estimator": "LinearRegression",
-    "n_samples": 50000,
-    "n_features": 200,
-    "cpu_time": 0.093,
-    "gpu_time": 0.016,
-    "speedup": 5.93
+    "cpu_time": 1.2094702500035055,
+    "gpu_time": 0.14835354103706777,
+    "speedup": 8.152621376939738,
+    "n_samples": 200000,
+    "n_features": 500
   },
   {
     "estimator": "Ridge",
-    "n_samples": 50000,
-    "n_features": 200,
-    "cpu_time": 0.012,
-    "gpu_time": 0.011,
-    "speedup": 1.16
+    "cpu_time": 0.1146125000086613,
+    "gpu_time": 0.1263504580128938,
+    "speedup": 0.9070999964002135,
+    "n_samples": 200000,
+    "n_features": 500
   },
   {
     "estimator": "LogisticRegression",
-    "n_samples": 20000,
-    "n_features": 100,
-    "cpu_time": 0.011,
-    "gpu_time": 0.012,
-    "speedup": 0.91
+    "cpu_time": 0.029441082966513932,
+    "gpu_time": 0.03204833302879706,
+    "speedup": 0.9186463127445542,
+    "n_samples": 100000,
+    "n_features": 200
+  },
+  {
+    "estimator": "TruncatedSVD",
+    "cpu_time": 0.28090287500526756,
+    "gpu_time": 0.0781520830350928,
+    "speedup": 3.594310786049466,
+    "n_samples": 100000,
+    "n_features": 500
   },
   {
     "estimator": "KMeans",
-    "n_samples": 50000,
-    "n_features": 50,
-    "cpu_time": 0.077,
-    "gpu_time": 0.111,
-    "speedup": 0.69
+    "cpu_time": 3.515451541985385,
+    "gpu_time": 5.224565459007863,
+    "speedup": 0.6728696519486166,
+    "n_samples": 500000,
+    "n_features": 100
   },
   {
     "estimator": "StandardScaler",
-    "n_samples": 100000,
-    "n_features": 100,
-    "cpu_time": 0.034,
-    "gpu_time": 0.004,
-    "speedup": 8.27
+    "cpu_time": 0.2936426250380464,
+    "gpu_time": 0.04856312501942739,
+    "speedup": 6.046617159018832,
+    "n_samples": 1000000,
+    "n_features": 100
+  },
+  {
+    "estimator": "MinMaxScaler",
+    "cpu_time": 0.04067466699052602,
+    "gpu_time": 0.036595917015802115,
+    "speedup": 1.1114536895731484,
+    "n_samples": 1000000,
+    "n_features": 100
   }
 ]

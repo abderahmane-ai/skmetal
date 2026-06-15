@@ -1,6 +1,6 @@
 import numpy as np
 from ._base import BaseGPUEstimator
-from .._bridge import scaler_fit, column_minmax, column_transform
+from .._bridge import scaler_fit, column_minmax, column_transform, minmax_transform
 
 
 class MetalStandardScaler(BaseGPUEstimator):
@@ -27,7 +27,11 @@ class MetalStandardScaler(BaseGPUEstimator):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_transform(X)
-        return (X - self._estimator.mean_) / self._estimator.scale_
+        n, d = X.shape
+        inv_scale = np.where(self._estimator.scale_ < 1e-15, 1.0, 1.0 / self._estimator.scale_)
+        output = np.empty_like(X)
+        column_transform(X, output, self._estimator.mean_, inv_scale)
+        return output
 
 
 class MetalMinMaxScaler(BaseGPUEstimator):
@@ -59,7 +63,11 @@ class MetalMinMaxScaler(BaseGPUEstimator):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_transform(X)
-        return X * self._estimator.scale_ + self._estimator.min_
+        fmin, fmax = self._estimator.feature_range
+        output = np.empty_like(X)
+        minmax_transform(X, output, self._estimator.data_min_,
+                        self._estimator.data_max_, fmin, fmax)
+        return output
 
 
 class MetalRobustScaler(BaseGPUEstimator):

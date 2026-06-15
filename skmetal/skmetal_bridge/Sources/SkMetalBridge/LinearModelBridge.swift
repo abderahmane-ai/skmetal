@@ -122,71 +122,6 @@ public func skmetal_ridge_fit_solve(
     return 0
 }
 
-// MARK: - Ridge solve: L2 regularized Cholesky solve on GPU (standalone, for existing ridge_fit)
-
-@_cdecl("skmetal_ridge_solve")
-public func skmetal_ridge_solve(
-    XTX: UnsafeMutableRawPointer,
-    XTy: UnsafeMutableRawPointer,
-    coef_out: UnsafeMutableRawPointer,
-    alpha: Float,
-    p: Int
-) -> Int32 {
-    let ctx = MetalContext.shared
-    let fs = MemoryLayout<Float>.stride
-    let xtxSize = p * p * fs
-    let xtySize = p * fs
-
-    guard let xtxBuffer = wrapOutput(XTX, length: xtxSize, device: ctx.device),
-          let xtyBuffer = wrapOutput(XTy, length: xtySize, device: ctx.device),
-          let coefBuffer = wrapOutput(coef_out, length: xtySize, device: ctx.device) else {
-        return 1
-    }
-
-    guard let addDiagPpl = ctx.getPipeline(name: "add_diagonal", functionName: "add_diagonal") else {
-        return 1
-    }
-
-    guard let statusBuffer = ctx.device.makeBuffer(length: MemoryLayout<Int32>.stride, options: .storageModeShared) else {
-        return 1
-    }
-
-    let rowBytes = p * fs
-    let descXTX = MPSMatrixDescriptor(dimensions: p, columns: p, rowBytes: rowBytes, dataType: .float32)
-    let descVec = MPSMatrixDescriptor(dimensions: p, columns: 1, rowBytes: fs, dataType: .float32)
-
-    let matrixXTX = MPSMatrix(buffer: xtxBuffer, descriptor: descXTX)
-    let matrixXTy = MPSMatrix(buffer: xtyBuffer, descriptor: descVec)
-    let matrixCoef = MPSMatrix(buffer: coefBuffer, descriptor: descVec)
-
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-
-    let encDiag = cb.makeComputeCommandEncoder()!
-    encDiag.setComputePipelineState(addDiagPpl)
-    encDiag.setBuffer(xtxBuffer, offset: 0, index: 0)
-    var a = alpha
-    encDiag.setBytes(&a, length: fs, index: 1)
-    var pU = UInt32(p)
-    encDiag.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 2)
-    encDiag.dispatchThreads(MTLSize(width: p, height: 1, depth: 1),
-                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-    encDiag.endEncoding()
-
-    let cholesky = MPSMatrixDecompositionCholesky(device: ctx.device, lower: true, order: p)
-    cholesky.encode(commandBuffer: cb, sourceMatrix: matrixXTX, resultMatrix: matrixXTX, status: statusBuffer)
-
-    let solve = MPSMatrixSolveCholesky(device: ctx.device, upper: false, order: p, numberOfRightHandSides: 1)
-    solve.encode(commandBuffer: cb, sourceMatrix: matrixXTX, rightHandSideMatrix: matrixXTy, solutionMatrix: matrixCoef)
-
-    cb.commit()
-    cb.waitUntilCompleted()
-
-    let status = statusBuffer.contents().assumingMemoryBound(to: Int32.self)[0]
-    guard status == 0 else { return 1 }
-
-    return 0
-}
-
 // MARK: - Linear solve: unregularized Cholesky solve on GPU (LinearRegression)
 
 @_cdecl("skmetal_linear_solve")
@@ -288,8 +223,7 @@ public func skmetal_fista_fit(
           let subPpl = ctx.getPipeline(name: "subtract", functionName: "subtract"),
           let stPpl = ctx.getPipeline(name: "soft_threshold", functionName: "soft_threshold"),
           let scalePpl = ctx.getPipeline(name: "scale_f32", functionName: "scale_f32"),
-          let _ = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum"),
-          let _ = ctx.getPipeline(name: "norm_sq", functionName: "norm_sq") else {
+          let _ = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") else {
         return 1
     }
 
@@ -356,127 +290,161 @@ public func skmetal_fista_fit(
     let enDenom: Float = (l1_ratio < 1.0) ? (1.0 + step * alpha * (1.0 - l1_ratio) * Float(n)) : 1.0
     let enScale: Float = (enDenom != 1.0) ? (1.0 / enDenom) : 1.0
 
-    let batchSize = 5
-    let checkEvery = 25
     let tg256 = MTLSize(width: 256, height: 1, depth: 1)
     let grd256 = MTLSize(width: (p + 255) / 256, height: 1, depth: 1)
     var t: Float = 1.0
     var it: Int32 = 0
 
-    var itCount = 0
-    while itCount < Int(max_iter) {
-        let batchEnd = min(itCount + batchSize, Int(max_iter))
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+    // Fused: encode ALL iterations into 1 command buffer with GPU-side convergence.
+    let batchSize = Int(max_iter)
+    let partialsPerIter = max(1, (p + 255) / 256)
+    let convBufSize = batchSize * partialsPerIter * fs
+    let snapBufSize = batchSize * pBufSize
+    guard let convBuf = ctx.reusableBuffer(length: convBufSize),
+          let snapBuf = ctx.reusableBuffer(length: snapBufSize),
+          let maxDiffPpl = ctx.getPipeline(name: "max_abs_diff", functionName: "max_abs_diff") else {
+        return 1
+    }
 
-        for batchIt in itCount..<batchEnd {
-            it = Int32(batchIt + 1)
+    let cb = ctx.commandQueue.makeCommandBuffer()!
 
-            let blit1 = cb.makeBlitCommandEncoder()!
-            blit1.copy(from: xBuf_g, sourceOffset: 0, to: xPrevBuf, destinationOffset: 0, size: pBufSize)
-            blit1.endEncoding()
+    for batchIt in 0..<batchSize {
+        it = Int32(batchIt + 1)
 
-            let gemm = MPSMatrixMultiplication(
-                device: ctx.device, transposeLeft: false, transposeRight: false,
-                resultRows: p, resultColumns: 1, interiorColumns: p,
-                alpha: 1.0, beta: 0.0)
-            gemm.encode(commandBuffer: cb, leftMatrix: mXTX, rightMatrix: mZ, resultMatrix: mGrad)
+        let blit1 = cb.makeBlitCommandEncoder()!
+        blit1.copy(from: xBuf_g, sourceOffset: 0, to: xPrevBuf, destinationOffset: 0, size: pBufSize)
+        blit1.endEncoding()
 
-            let encGradSub = cb.makeComputeCommandEncoder()!
-            encGradSub.setComputePipelineState(axpyPpl)
-            encGradSub.setBuffer(gradBuf, offset: 0, index: 0)
-            encGradSub.setBuffer(xtyBuf, offset: 0, index: 1)
-            var m1: Float = -1.0
-            encGradSub.setBytes(&m1, length: fs, index: 2)
-            var nU = UInt32(p)
-            encGradSub.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-            encGradSub.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
-            encGradSub.endEncoding()
+        let gemm = MPSMatrixMultiplication(
+            device: ctx.device, transposeLeft: false, transposeRight: false,
+            resultRows: p, resultColumns: 1, interiorColumns: p,
+            alpha: 1.0, beta: 0.0)
+        gemm.encode(commandBuffer: cb, leftMatrix: mXTX, rightMatrix: mZ, resultMatrix: mGrad)
 
-            let blit2 = cb.makeBlitCommandEncoder()!
-            blit2.copy(from: zBuf, sourceOffset: 0, to: xTempBuf, destinationOffset: 0, size: pBufSize)
-            blit2.endEncoding()
+        let encGradSub = cb.makeComputeCommandEncoder()!
+        encGradSub.setComputePipelineState(axpyPpl)
+        encGradSub.setBuffer(gradBuf, offset: 0, index: 0)
+        encGradSub.setBuffer(xtyBuf, offset: 0, index: 1)
+        var m1: Float = -1.0
+        encGradSub.setBytes(&m1, length: fs, index: 2)
+        var nU = UInt32(p)
+        encGradSub.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        encGradSub.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
+        encGradSub.endEncoding()
 
-            let encStep = cb.makeComputeCommandEncoder()!
-            encStep.setComputePipelineState(axpyPpl)
-            encStep.setBuffer(xTempBuf, offset: 0, index: 0)
-            encStep.setBuffer(gradBuf, offset: 0, index: 1)
-            var negStep: Float = -step
-            encStep.setBytes(&negStep, length: fs, index: 2)
+        let blit2 = cb.makeBlitCommandEncoder()!
+        blit2.copy(from: zBuf, sourceOffset: 0, to: xTempBuf, destinationOffset: 0, size: pBufSize)
+        blit2.endEncoding()
+
+        let encStep = cb.makeComputeCommandEncoder()!
+        encStep.setComputePipelineState(axpyPpl)
+        encStep.setBuffer(xTempBuf, offset: 0, index: 0)
+        encStep.setBuffer(gradBuf, offset: 0, index: 1)
+        var negStep: Float = -step
+        encStep.setBytes(&negStep, length: fs, index: 2)
+        nU = UInt32(p)
+        encStep.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        encStep.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
+        encStep.endEncoding()
+
+        let encST = cb.makeComputeCommandEncoder()!
+        encST.setComputePipelineState(stPpl)
+        encST.setBuffer(xBuf_g, offset: 0, index: 0)
+        encST.setBuffer(xTempBuf, offset: 0, index: 1)
+        var thr = thresh
+        encST.setBytes(&thr, length: fs, index: 2)
+        nU = UInt32(p)
+        encST.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        encST.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
+        encST.endEncoding()
+
+        if enScale != 1.0 {
+            let encScale = cb.makeComputeCommandEncoder()!
+            encScale.setComputePipelineState(scalePpl)
+            encScale.setBuffer(xBuf_g, offset: 0, index: 0)
+            var sc = enScale
+            encScale.setBytes(&sc, length: fs, index: 1)
             nU = UInt32(p)
-            encStep.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-            encStep.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
-            encStep.endEncoding()
-
-            let encST = cb.makeComputeCommandEncoder()!
-            encST.setComputePipelineState(stPpl)
-            encST.setBuffer(xBuf_g, offset: 0, index: 0)
-            encST.setBuffer(xTempBuf, offset: 0, index: 1)
-            var thr = thresh
-            encST.setBytes(&thr, length: fs, index: 2)
-            nU = UInt32(p)
-            encST.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-            encST.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
-            encST.endEncoding()
-
-            if enScale != 1.0 {
-                let encScale = cb.makeComputeCommandEncoder()!
-                encScale.setComputePipelineState(scalePpl)
-                encScale.setBuffer(xBuf_g, offset: 0, index: 0)
-                var sc = enScale
-                encScale.setBytes(&sc, length: fs, index: 1)
-                nU = UInt32(p)
-                encScale.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
-                encScale.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
-                encScale.endEncoding()
-            }
-
-            let tPrev = t
-            t = (1.0 + sqrt(1.0 + 4.0 * tPrev * tPrev)) / 2.0
-            let factor = (tPrev - 1.0) / t
-
-            let encSub = cb.makeComputeCommandEncoder()!
-            encSub.setComputePipelineState(subPpl)
-            encSub.setBuffer(xBuf_g, offset: 0, index: 0)
-            encSub.setBuffer(xPrevBuf, offset: 0, index: 1)
-            encSub.setBuffer(xTempBuf, offset: 0, index: 2)
-            nU = UInt32(p)
-            encSub.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-            encSub.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
-            encSub.endEncoding()
-
-            let blit3 = cb.makeBlitCommandEncoder()!
-            blit3.copy(from: xBuf_g, sourceOffset: 0, to: zBuf, destinationOffset: 0, size: pBufSize)
-            blit3.endEncoding()
-
-            let encZUp = cb.makeComputeCommandEncoder()!
-            encZUp.setComputePipelineState(axpyPpl)
-            encZUp.setBuffer(zBuf, offset: 0, index: 0)
-            encZUp.setBuffer(xTempBuf, offset: 0, index: 1)
-            var fac = factor
-            encZUp.setBytes(&fac, length: fs, index: 2)
-            nU = UInt32(p)
-            encZUp.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
-            encZUp.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
-            encZUp.endEncoding()
+            encScale.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
+            encScale.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
+            encScale.endEncoding()
         }
 
-        cb.commit()
-        cb.waitUntilCompleted()
+        let tPrev = t
+        t = (1.0 + sqrt(1.0 + 4.0 * tPrev * tPrev)) / 2.0
+        let factor = (tPrev - 1.0) / t
 
-        itCount = batchEnd
-        if batchEnd % checkEvery == 0 || batchEnd >= Int(max_iter) - 1 {
-            let xP = xBuf_g.contents().assumingMemoryBound(to: Float.self)
-            let xPrevP = xPrevBuf.contents().assumingMemoryBound(to: Float.self)
-            var diff: Float = 0
-            for i in 0..<p {
-                let d = abs(xP[i] - xPrevP[i])
-                if d > diff { diff = d }
-            }
-            if diff < tol { break }
+        let encSub = cb.makeComputeCommandEncoder()!
+        encSub.setComputePipelineState(subPpl)
+        encSub.setBuffer(xBuf_g, offset: 0, index: 0)
+        encSub.setBuffer(xPrevBuf, offset: 0, index: 1)
+        encSub.setBuffer(xTempBuf, offset: 0, index: 2)
+        nU = UInt32(p)
+        encSub.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        encSub.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
+        encSub.endEncoding()
+
+        let blit3 = cb.makeBlitCommandEncoder()!
+        blit3.copy(from: xBuf_g, sourceOffset: 0, to: zBuf, destinationOffset: 0, size: pBufSize)
+        blit3.endEncoding()
+
+        let encZUp = cb.makeComputeCommandEncoder()!
+        encZUp.setComputePipelineState(axpyPpl)
+        encZUp.setBuffer(zBuf, offset: 0, index: 0)
+        encZUp.setBuffer(xTempBuf, offset: 0, index: 1)
+        var fac = factor
+        encZUp.setBytes(&fac, length: fs, index: 2)
+        nU = UInt32(p)
+        encZUp.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 3)
+        encZUp.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
+        encZUp.endEncoding()
+
+        // Snapshot current coef for post-hoc convergence retrieval
+        let snapBlit = cb.makeBlitCommandEncoder()!
+        snapBlit.copy(from: xBuf_g, sourceOffset: 0,
+                      to: snapBuf, destinationOffset: batchIt * pBufSize,
+                      size: pBufSize)
+        snapBlit.endEncoding()
+
+        // GPU-side convergence: max_abs_diff(xBuf_g, xPrevBuf) → convBuf[it]
+        let encConv = cb.makeComputeCommandEncoder()!
+        encConv.setComputePipelineState(maxDiffPpl)
+        encConv.setBuffer(xBuf_g, offset: 0, index: 0)
+        encConv.setBuffer(xPrevBuf, offset: 0, index: 1)
+        encConv.setBuffer(convBuf, offset: 0, index: 2)
+        var pU = UInt32(p)
+        var ngU = UInt32(partialsPerIter)
+        var wOff = UInt32(batchIt * partialsPerIter)
+        encConv.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
+        encConv.setBytes(&ngU, length: MemoryLayout<UInt32>.stride, index: 4)
+        encConv.setBytes(&wOff, length: MemoryLayout<UInt32>.stride, index: 5)
+        encConv.dispatchThreadgroups(MTLSize(width: partialsPerIter, height: 1, depth: 1),
+                                     threadsPerThreadgroup: tg256)
+        encConv.endEncoding()
+    }
+
+    cb.commit()
+    cb.waitUntilCompleted()
+
+    // Post-process: find converged iteration from partial maxes
+    let convPtr = convBuf.contents().assumingMemoryBound(to: Float.self)
+    var convergedAt = batchSize - 1
+    for iteration in 0..<batchSize {
+        let base = iteration * partialsPerIter
+        var maxVal: Float = 0
+        for j in 0..<partialsPerIter {
+            if convPtr[base + j] > maxVal { maxVal = convPtr[base + j] }
+        }
+        if maxVal < tol {
+            convergedAt = iteration
+            break
         }
     }
 
-    memcpy(coefBuf.contents(), xBuf_g.contents(), pBufSize)
-    n_iter_out?.pointee = it
+    let snapBase = snapBuf.contents().assumingMemoryBound(to: Float.self)
+    memcpy(coefBuf.contents(), snapBase + convergedAt * p, pBufSize)
+    n_iter_out?.pointee = Int32(convergedAt + 1)
+    ctx.recycleBuffer(convBuf)
+    ctx.recycleBuffer(snapBuf)
     return 0
 }

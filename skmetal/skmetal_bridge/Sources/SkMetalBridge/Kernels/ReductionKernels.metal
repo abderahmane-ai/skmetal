@@ -108,42 +108,108 @@ kernel void reduce_mean_var(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // Final Welford merge across SIMD group leaders
-    uint num_simd_groups = (lsz + 31) / 32;
-    if (simd_group_id == 0 && lid < num_simd_groups) {
-        float final_mean = tg_means[lid];
-        float final_m2 = tg_m2s[lid];
-        uint final_cnt = tg_cnts[lid];
+    // Final Welford merge across SIMD group leaders via simd_shuffle_down
+    // (zero barriers, single hardware instruction per iteration)
+    if (simd_group_id == 0) {
+        float fm = tg_means[lid];
+        float fm2 = tg_m2s[lid];
+        uint fc = tg_cnts[lid];
 
-        for (uint offset = num_simd_groups / 2; offset > 0; offset >>= 1) {
-            if (lid < offset) {
-                float a_m = final_mean;
-                float a_m2 = final_m2;
-                uint a_c = final_cnt;
-                float b_m = tg_means[lid + offset];
-                float b_m2 = tg_m2s[lid + offset];
-                uint b_c = tg_cnts[lid + offset];
-                if (b_c > 0 && a_c > 0) {
-                    float delta = b_m - a_m;
-                    uint new_c = a_c + b_c;
-                    a_m += delta * (float)b_c / (float)new_c;
-                    a_m2 = a_m2 + b_m2 + delta * delta * (float)a_c * (float)b_c / (float)new_c;
-                    a_c = new_c;
-                } else if (b_c > 0) {
-                    a_m = b_m; a_m2 = b_m2; a_c = b_c;
-                }
-                tg_means[lid] = a_m;
-                tg_m2s[lid] = a_m2;
-                tg_cnts[lid] = a_c;
+        for (uint offset = 16; offset > 0; offset >>= 1) {
+            float peer_mean = simd_shuffle_down(fm, offset);
+            float peer_m2 = simd_shuffle_down(fm2, offset);
+            uint peer_cnt = simd_shuffle_down(fc, offset);
+            if (peer_cnt > 0 && fc > 0) {
+                float delta = peer_mean - fm;
+                uint new_c = fc + peer_cnt;
+                fm += delta * (float)peer_cnt / (float)new_c;
+                fm2 = fm2 + peer_m2 + delta * delta * (float)fc * (float)peer_cnt / (float)new_c;
+                fc = new_c;
+            } else if (peer_cnt > 0) {
+                fm = peer_mean; fm2 = peer_m2; fc = peer_cnt;
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
         }
 
         if (lid == 0) {
             uint gid = tid / lsz;
-            partial_mean[gid] = tg_means[0];
-            partial_m2[gid] = tg_m2s[0];
-            partial_count[gid] = tg_cnts[0];
+            partial_mean[gid] = fm;
+            partial_m2[gid] = fm2;
+            partial_count[gid] = fc;
+        }
+    }
+}
+
+// L2 norm squared: Σ input[i]² with SIMD reduction.
+// Used by IRLS for GPU-resident convergence detection.
+kernel void norm2(
+    device const float* input [[buffer(0)]],
+    device float* partial_out [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    constant uint& num_groups [[buffer(3)]],
+    constant uint& write_offset [[buffer(4)]],
+    uint tid [[thread_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]],
+    uint lsz [[threads_per_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]
+) {
+    uint total_threads = lsz * num_groups;
+    float local_sum = 0.0f;
+    for (uint i = tid; i < n; i += total_threads) {
+        local_sum += input[i] * input[i];
+    }
+    float simd_result = simd_sum(local_sum);
+    threadgroup float shared[32];
+    if (simd_lane_id == 0) {
+        shared[simd_group_id] = simd_result;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint num_simd_groups = (lsz + 31) / 32;
+    if (simd_group_id == 0) {
+        float tg_partial = (lid < num_simd_groups) ? shared[lid] : 0.0f;
+        float tg_result = simd_sum(tg_partial);
+        if (lid == 0) {
+            partial_out[write_offset + (tid / lsz)] = tg_result;
+        }
+    }
+}
+
+// Max absolute difference between two vectors with SIMD reduction.
+// Used by FISTA for GPU-resident convergence detection.
+kernel void max_abs_diff(
+    device const float* a [[buffer(0)]],
+    device const float* b [[buffer(1)]],
+    device float* partial_out [[buffer(2)]],
+    constant uint& n [[buffer(3)]],
+    constant uint& num_groups [[buffer(4)]],
+    constant uint& write_offset [[buffer(5)]],
+    uint tid [[thread_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]],
+    uint lsz [[threads_per_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]
+) {
+    uint total_threads = lsz * num_groups;
+    float local_max = 0.0f;
+    for (uint i = tid; i < n; i += total_threads) {
+        float diff = fabs(a[i] - b[i]);
+        local_max = fmax(local_max, diff);
+    }
+
+    float simd_result = simd_max(local_max);
+
+    threadgroup float shared[32];
+    if (simd_lane_id == 0) {
+        shared[simd_group_id] = simd_result;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    uint num_simd_groups = (lsz + 31) / 32;
+    if (simd_group_id == 0) {
+        float tg_partial = (lid < num_simd_groups) ? shared[lid] : 0.0f;
+        float tg_result = simd_max(tg_partial);
+        if (lid == 0) {
+            partial_out[write_offset + (tid / lsz)] = tg_result;
         }
     }
 }

@@ -6,12 +6,16 @@ from .._bridge import (
     pairwise_distance,
     kmeans_assign,
     kmeans_inertia,
-    kmeans_shift,
     compute_mindists,
     kmeans_batch_fused,
     sv_init, sv_hook, sv_shortcut,
 )
 from .._config import get_config
+
+try:
+    from ._mlx_kmeans import MetalKMeansMLX  # noqa: F401
+except ImportError:
+    pass
 
 
 
@@ -67,18 +71,8 @@ class MetalKMeans(BaseGPUEstimator):
 
     def _run_kmeans_batched(self, X, centroids, assignments,
                               n, d, k, num_groups, max_iter, tol):
-        batch_size = max(1, (max_iter + 2) // 3)
-        total_iters = 0
-        for batch_start in range(0, max_iter, batch_size):
-            remaining = min(batch_size, max_iter - batch_start)
-            old = centroids.copy()
-            kmeans_batch_fused(X, centroids, assignments,
-                               n, d, k, num_groups, remaining)
-            total_iters += remaining
-            shift = kmeans_shift(centroids, old, k, d)
-            if shift < tol:
-                break
-        return total_iters
+        return kmeans_batch_fused(X, centroids, assignments,
+                                  n, d, k, num_groups, max_iter, tol)
 
     def _kmeans_parallel_init(self, X, k, rng):
         """k-means|| (parallel) initialization — O(log k) rounds vs k serial rounds.

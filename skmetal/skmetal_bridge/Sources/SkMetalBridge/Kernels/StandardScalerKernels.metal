@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-constant uint BLOCK_COLS = 8;
+constant uint BLOCK_COLS = 16;
 
 // Fused StandardScaler: mean and variance for ALL columns in one dispatch.
 // Uses tiled column approach: each threadgroup processes BLOCK_COLS columns.
@@ -24,9 +24,9 @@ kernel void scaler_fit(
     uint col_end = min(col_start + BLOCK_COLS, d);
     uint active_cols = col_end - col_start;
 
-    float local_mean[8];
-    float local_m2[8];
-    uint local_count[8];
+    float local_mean[16];
+    float local_m2[16];
+    uint local_count[16];
 
     for (uint b = 0; b < active_cols; b++) {
         local_mean[b] = 0.0f;
@@ -75,9 +75,9 @@ kernel void scaler_fit(
     // Level 2: SIMD group 0 writes per-column results to threadgroup
     uint lane_id = lid & 31;
     uint num_simd_groups = (lsz + 31) / 32;
-    threadgroup float tg_mean[64];
-    threadgroup float tg_m2[64];
-    threadgroup uint tg_count[64];
+    threadgroup float tg_mean[128];
+    threadgroup float tg_m2[128];
+    threadgroup uint tg_count[128];
 
     if (lane_id == 0) {
         uint sg_idx = lid >> 5;

@@ -13,6 +13,15 @@ from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor, Nearest
 from sklearn.ensemble import HistGradientBoostingRegressor, HistGradientBoostingClassifier
 from sklearn.svm import SVC, SVR
 
+_HAS_MLX = False
+try:
+    import mlx.core  # noqa: F401
+    _HAS_MLX = True
+except ImportError:
+    pass
+
+_KMEANS_CLASS = "MetalKMeansMLX" if _HAS_MLX else "MetalKMeans"
+
 # Maps sklearn class → (python_module, gpu_class_name).
 # This is the ONLY place where this mapping lives. _dispatch.py consumes it directly.
 GPU_REGISTRY: dict[type, tuple[str, str]] = {
@@ -23,7 +32,7 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
     ElasticNet:                      ("skmetal.estimators.linear_model", "MetalElasticNet"),
 
     TruncatedSVD:                    ("skmetal.estimators.decomposition", "MetalTruncatedSVD"),
-    KMeans:                          ("skmetal.estimators.cluster",       "MetalKMeans"),
+    KMeans:                          ("skmetal.estimators.cluster",       _KMEANS_CLASS),
     DBSCAN:                          ("skmetal.estimators.cluster",       "MetalDBSCAN"),
     GaussianNB:                      ("skmetal.estimators.naive_bayes",   "MetalGaussianNB"),
 

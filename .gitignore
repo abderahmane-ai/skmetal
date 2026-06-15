@@ -48,5 +48,10 @@ AGENTS.md
 .agents/
 GPU_ACCELERATION_RESEARCH.md
 
+# Project plans and session continuations (not committed)
+CONTINUE_PROMPT.md
+IMPLEMENTATION_PLAN.md
+OPTIMIZATION_AUDIT.md
+
 # Removed scaffolding
 skmetal_core/

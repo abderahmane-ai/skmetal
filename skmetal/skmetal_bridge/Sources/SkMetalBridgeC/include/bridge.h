@@ -35,12 +35,11 @@ int skmetal_scale_rows(const void* X, const void* weights, void* output, size_t 
 
 int skmetal_kmeans_assign(const void* X, const void* centroids, void* assignments, size_t n, size_t d, size_t k);
 int skmetal_kmeans_combine_normalize(const void* partial_centroids, const void* partial_counts, void* centroids, size_t k, size_t d, size_t num_groups);
-int skmetal_kmeans_batch_fused(const void* X, void* centroids, void* assignments, size_t n, size_t d, size_t k, size_t num_groups, size_t max_iter);
+int skmetal_kmeans_batch_fused(const void* X, void* centroids, void* assignments, size_t n, size_t d, size_t k, size_t num_groups, size_t max_iter, float tol, int32_t* n_iter_out);
 
 int skmetal_sigmoid(const void* input, void* output, size_t n);
 int skmetal_subtract(const void* a, const void* b, void* output, size_t n);
 int skmetal_axpy(void* a, const void* b, float alpha, size_t n);
-int skmetal_norm_sq(const void* input, void* output, size_t n);
 
 int skmetal_compute_mindists(const void* X, const void* centroids, const void* assignments, void* dists, size_t n, size_t d, size_t k);
 
@@ -56,6 +55,7 @@ int skmetal_knn_vote_regress(const void* indices, const void* train_targets, voi
 int skmetal_soft_threshold(void* w, const void* w_temp, float threshold, size_t n);
 int skmetal_column_transform(const void* input, void* output, const void* center, const void* scale, size_t n, size_t d);
 
+int skmetal_minmax_transform(const void* X, void* X_out, const void* min_vals, const void* max_vals, size_t n, size_t d, float feature_min, float feature_max);
 int skmetal_warmup(void);
 
 #ifdef __cplusplus

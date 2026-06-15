@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-constant uint BLOCK_COLS = 8;
+constexpr constant uint BLOCK_COLS = 16;
 
 // Per-column min and max in a single dispatch using tiled column approach.
 // Each threadgroup processes BLOCK_COLS columns, reading BLOCK_COLS
@@ -25,8 +25,8 @@ kernel void column_minmax(
     uint col_end = min(col_start + BLOCK_COLS, d);
     uint active_cols = col_end - col_start;
 
-    float local_min[8];
-    float local_max[8];
+    float local_min[16];
+    float local_max[16];
 
     for (uint b = 0; b < active_cols; b++) {
         local_min[b] = FLT_MAX;
@@ -53,8 +53,8 @@ kernel void column_minmax(
     // Level 2: SIMD group 0 writes per-column results to threadgroup
     uint lane_id = lid & 31;
     uint num_simd_groups = (lsz + 31) / 32;
-    threadgroup float tg_mins[64];  // max 8 cols * 8 SIMD groups
-    threadgroup float tg_maxs[64];
+    threadgroup float tg_mins[128];  // max 16 cols * 8 SIMD groups
+    threadgroup float tg_maxs[128];
 
     if (lane_id == 0) {
         uint sg_idx = lid >> 5;
@@ -87,4 +87,25 @@ kernel void column_minmax(
             max_out[col_start + b] = tg_maxs[b * num_simd_groups];
         }
     }
+}
+
+// Apply min-max normalization: X_scaled = (X - min) / (max - min) * (fmax - fmin) + fmin
+// One thread per element. Grid: (d, n) total threads.
+kernel void minmax_transform(
+    device const float* X [[buffer(0)]],
+    device float* X_out [[buffer(1)]],
+    device const float* min_vals [[buffer(2)]],
+    device const float* max_vals [[buffer(3)]],
+    constant uint& n [[buffer(4)]],
+    constant uint& d [[buffer(5)]],
+    constant float& feature_min [[buffer(6)]],
+    constant float& feature_max [[buffer(7)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint row = gid.y;
+    uint col = gid.x;
+    if (row >= n || col >= d) return;
+    float range = max_vals[col] - min_vals[col];
+    float scale = (feature_max - feature_min) / max(range, 1e-10f);
+    X_out[row * d + col] = (X[row * d + col] - min_vals[col]) * scale + feature_min;
 }

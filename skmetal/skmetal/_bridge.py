@@ -82,7 +82,7 @@ _BRIDGE_REGISTRY = [
     ("skmetal_scaler_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_column_minmax", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_kmeans_assign", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_kmeans_batch_fused", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
+    ("skmetal_kmeans_batch_fused", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.POINTER(ctypes.c_int32)),
     ("skmetal_compute_mindists", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
     ("skmetal_gemm", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.c_float, ctypes.c_int, ctypes.c_int),
     ("skmetal_fista_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.POINTER(ctypes.c_int32)),
@@ -101,10 +101,12 @@ _BRIDGE_REGISTRY = [
     ("skmetal_svc_predict_binary", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float),
     ("skmetal_logreg_irls_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
     ("skmetal_logreg_lbfgs_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
-    ("skmetal_multinomial_irls_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
     ("skmetal_ridge_fit_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_ridge_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t),
     ("skmetal_linear_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
+    ("skmetal_minmax_transform", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.c_float),
+    ("skmetal_convert_f32_to_f16", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
+    ("skmetal_convert_f16_to_f32", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
+    ("skmetal_gemm_f16", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t),
 ]
 
 if METAL_AVAILABLE:
@@ -130,9 +132,78 @@ if METAL_AVAILABLE:
 # Python wrapper functions
 # ============================================================
 
+# ---------------------------------------------------------------------------
+# Float16 conversion and GEMM (half-precision throughput on Apple GPU)
+# ---------------------------------------------------------------------------
+
+def _check_contiguous(x: np.ndarray) -> None:
+    if not x.flags["C_CONTIGUOUS"]:
+        raise ValueError("array must be C-contiguous")
+
+
+def convert_f32_to_f16(x: np.ndarray) -> np.ndarray:
+    """Convert float32 array to float16 on GPU (zero-copy)."""
+    if x.dtype != np.float32:
+        raise TypeError("x must be float32")
+    _check_contiguous(x)
+    out = np.empty(x.size, dtype=np.float16, order="C")
+    _bridge_call(_lib.skmetal_convert_f32_to_f16, x, out, x.size)
+    return out.reshape(x.shape)
+
+
+def convert_f16_to_f32(x: np.ndarray) -> np.ndarray:
+    """Convert float16 array to float32 on GPU (zero-copy)."""
+    if x.dtype != np.float16:
+        raise TypeError("x must be float16")
+    _check_contiguous(x)
+    out = np.empty(x.size, dtype=np.float32, order="C")
+    _bridge_call(_lib.skmetal_convert_f16_to_f32, x, out, x.size)
+    return out.reshape(x.shape)
+
+
+def gemm_f16(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """C = A @ B using float16 simdgroup GEMM (half in/out, zero-copy).
+
+    Only supports M,N,K <= 256, all aligned to 8, no transpose.
+    Unsupported dimensions return RuntimeError from the Swift bridge.
+    """
+    if A.dtype != np.float16 or B.dtype != np.float16:
+        raise TypeError("A and B must be float16")
+    M, K = A.shape
+    K2, N = B.shape
+    if K != K2:
+        raise ValueError(f"Incompatible dimensions: A {A.shape}, B {B.shape}")
+    C = np.empty((M, N), dtype=np.float16, order="C")
+    _bridge_call(_lib.skmetal_gemm_f16, A, B, C, M, N, K)
+    return C
+
+
+def _should_use_f16(A: np.ndarray, B: np.ndarray) -> bool:
+    """Check if f16 GEMM would be beneficial.
+
+    Conditions: dims aligned to 8, within simdgroup limits (<=256),
+    and large enough that conversion overhead is worth it (>= 64 per dim).
+    """
+    if not (A.dtype == np.float32 and B.dtype == np.float32):
+        return False
+    M, K1 = A.shape
+    K2, N = B.shape
+    if K1 != K2:
+        return False
+    K = K1
+    max_dim = 256
+    return (M <= max_dim and N <= max_dim and K <= max_dim
+            and M % 8 == 0 and N % 8 == 0 and K % 8 == 0
+            and M >= 128 and N >= 128 and K >= 128)
+
+
 def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
          trans_A=False, trans_B=False) -> np.ndarray:
-    """C = alpha * op(A) @ op(B) + beta * C (zero-copy)."""
+    """C = alpha * op(A) @ op(B) + beta * C (zero-copy).
+
+    Uses float16 path for small aligned matrices (2× throughput),
+    falls back to float32 MPS GEMM otherwise.
+    """
     if A.dtype != np.float32 or B.dtype != np.float32:
         raise TypeError("A and B must be float32")
     if not (A.flags["C_CONTIGUOUS"] and B.flags["C_CONTIGUOUS"]):
@@ -141,6 +212,17 @@ def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
     K2, N = (B.shape[1], B.shape[0]) if trans_B else (B.shape[0], B.shape[1])
     if K != K2:
         raise ValueError(f"Incompatible dimensions: A {A.shape}, B {B.shape}")
+
+    if not trans_A and not trans_B and alpha == 1.0 and beta == 0.0:
+        if _should_use_f16(A, B):
+            try:
+                A_f16 = convert_f32_to_f16(A)
+                B_f16 = convert_f32_to_f16(B)
+                C_f16 = gemm_f16(A_f16, B_f16)
+                return convert_f16_to_f32(C_f16)
+            except (RuntimeError, TypeError):
+                pass
+
     C = np.empty((M, N), dtype=np.float32, order="C")
     _bridge_call(_lib.skmetal_gemm, A, B, C, M, N, K,
                  ctypes.c_float(alpha), ctypes.c_float(beta),
@@ -176,10 +258,13 @@ def column_minmax(X: np.ndarray, min_out: np.ndarray, max_out: np.ndarray) -> No
 
 
 def kmeans_batch_fused(X, centroids, assignments,
-                        n, d, k, num_groups, max_iter):
-    """All KMeans iterations in one command buffer."""
+                        n, d, k, num_groups, max_iter, tol):
+    """KMeans iterations with GPU-side convergence detection."""
+    n_iter_out = ctypes.c_int32(0)
     _bridge_call(_lib.skmetal_kmeans_batch_fused,
-                 X, centroids, assignments, n, d, k, num_groups, max_iter)
+                 X, centroids, assignments, n, d, k, num_groups, max_iter,
+                 ctypes.c_float(tol), ctypes.byref(n_iter_out))
+    return n_iter_out.value
 
 
 def compute_mindists(X: np.ndarray, centroids: np.ndarray, assignments: np.ndarray,
@@ -215,12 +300,6 @@ def ridge_fit_solve(X: np.ndarray, y: np.ndarray,
     """Fused Ridge: center X + XTX + XTy + L2 + Cholesky solve (one GPU dispatch)."""
     _bridge_call(_lib.skmetal_ridge_fit_solve, X, y, X_mean, coef, alpha,
                  X.shape[0], X.shape[1])
-
-
-def ridge_solve(XTX: np.ndarray, XTy: np.ndarray,
-                 coef: np.ndarray, alpha: float) -> None:
-    """L2-regularized Cholesky solve on GPU: (XTX + αI)⁻¹ XTy = coef."""
-    _bridge_call(_lib.skmetal_ridge_solve, XTX, XTy, coef, alpha, XTX.shape[0])
 
 
 def linear_solve(XTX: np.ndarray, XTy: np.ndarray,
@@ -327,6 +406,20 @@ def knn_tiled_kneighbors(X_query: np.ndarray, X_train: np.ndarray, k: int,
     if err != 0:
         raise RuntimeError(f"knn_tiled_kneighbors failed with code {err} (n_q={n_q}, n_t={n_t}, d={d}, k={k}, metric={metric})")
     return out_values, out_indices
+
+
+def minmax_transform(X: np.ndarray, X_out: np.ndarray,
+                      min_vals: np.ndarray, max_vals: np.ndarray,
+                      feature_min: float = 0.0, feature_max: float = 1.0) -> None:
+    """GPU min-max normalization: X_scaled = (X - min) / (max - min) * (fmax - fmin) + fmin."""
+    if X.dtype != np.float32 or not X.flags["C_CONTIGUOUS"]:
+        raise TypeError("X must be float32 and C-contiguous")
+    if X_out.dtype != np.float32 or not X_out.flags["C_CONTIGUOUS"]:
+        raise TypeError("X_out must be float32 and C-contiguous")
+    _bridge_call(_lib.skmetal_minmax_transform,
+                 X, X_out, min_vals, max_vals,
+                 X.shape[0], X.shape[1],
+                 ctypes.c_float(feature_min), ctypes.c_float(feature_max))
 
 
 def column_transform(input: np.ndarray, output: np.ndarray,

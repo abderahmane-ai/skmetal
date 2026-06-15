@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skmetal"
-version = "0.4.7"
+version = "0.5.0rc1"
 description = "GPU-accelerated scikit-learn via Apple Metal"
 readme = "README.md"
 authors = [
@@ -30,6 +30,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mlx = [
+    "mlx>=0.31",
+]
 dev = [
     "pytest>=7.0",
     "pytest-timeout>=2.0",

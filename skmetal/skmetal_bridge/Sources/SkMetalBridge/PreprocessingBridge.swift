@@ -36,7 +36,7 @@ public func skmetal_scaler_fit(
     encoder.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 3)
     encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 4)
 
-    let blockCols = 8
+    let blockCols = 16
     let tgCount = (d + blockCols - 1) / blockCols
 
     let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
@@ -82,7 +82,7 @@ public func skmetal_column_minmax(
     encoder.setBytes(&nUint, length: MemoryLayout<UInt32>.stride, index: 3)
     encoder.setBytes(&dUint, length: MemoryLayout<UInt32>.stride, index: 4)
 
-    let blockColsMM = 8
+    let blockColsMM = 16
     let tgCountMM = (d + blockColsMM - 1) / blockColsMM
 
     let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
