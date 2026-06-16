@@ -1,4 +1,5 @@
 """Shared fixtures for all skmetal tests."""
+
 import pytest
 from skmetal._config import get_config, PER_ESTIMATOR_THRESHOLDS, _set_thread_device
 

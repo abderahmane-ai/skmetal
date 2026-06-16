@@ -8,7 +8,9 @@ from .._bridge import (
     kmeans_inertia,
     compute_mindists,
     kmeans_batch_fused,
-    sv_init, sv_hook, sv_shortcut,
+    sv_init,
+    sv_hook,
+    sv_shortcut,
 )
 from .._config import get_config
 
@@ -39,9 +41,7 @@ class MetalKMeans(BaseGPUEstimator):
             centroids = np.ascontiguousarray(centroids, dtype=np.float32)
             assignments = np.empty(n, dtype=np.uint32)
 
-            actual_iters = self._run_kmeans_batched(
-                X, centroids, assignments, n, d, k, num_groups, max_iter, tol
-            )
+            actual_iters = self._run_kmeans_batched(X, centroids, assignments, n, d, k, num_groups, max_iter, tol)
 
             if assignments.min() < 0 or assignments.max() >= k:
                 if get_config().verbose:
@@ -63,10 +63,8 @@ class MetalKMeans(BaseGPUEstimator):
         self._fitted = True
         return self
 
-    def _run_kmeans_batched(self, X, centroids, assignments,
-                              n, d, k, num_groups, max_iter, tol):
-        return kmeans_batch_fused(X, centroids, assignments,
-                                  n, d, k, num_groups, max_iter, tol)
+    def _run_kmeans_batched(self, X, centroids, assignments, n, d, k, num_groups, max_iter, tol):
+        return kmeans_batch_fused(X, centroids, assignments, n, d, k, num_groups, max_iter, tol)
 
     def _kmeans_parallel_init(self, X, k, rng):
         """k-means|| (parallel) initialization — O(log k) rounds vs k serial rounds.
@@ -105,14 +103,14 @@ class MetalKMeans(BaseGPUEstimator):
         # Prune candidates to k via weighted k-means (1 iteration on CPU)
         all_cand = np.array(candidates, dtype=np.float32)
         if all_cand.shape[0] <= k:
-            centroids[:all_cand.shape[0]] = all_cand
+            centroids[: all_cand.shape[0]] = all_cand
             for i in range(all_cand.shape[0], k):
                 centroids[i] = candidates[i % len(candidates)]
             return centroids
 
         from sklearn.cluster import KMeans as SklearnKMeans
-        km = SklearnKMeans(n_clusters=k, init=all_cand[:k], n_init=1,
-                          max_iter=1, random_state=rng)
+
+        km = SklearnKMeans(n_clusters=k, init=all_cand[:k], n_init=1, max_iter=1, random_state=rng)
         km.fit(all_cand)
         return km.cluster_centers_.astype(np.float32)
 
@@ -128,8 +126,8 @@ class MetalKMeans(BaseGPUEstimator):
 
     def _kmeans_cpu_fallback(self, X, k, max_iter, tol, rng):
         from sklearn.cluster import KMeans as SklearnKMeans
-        km = SklearnKMeans(n_clusters=k, init='k-means++', n_init=1,
-                          max_iter=max_iter, tol=tol, random_state=rng)
+
+        km = SklearnKMeans(n_clusters=k, init="k-means++", n_init=1, max_iter=max_iter, tol=tol, random_state=rng)
         km.fit(X)
         return km.cluster_centers_.astype(np.float32), km.labels_.astype(np.uint32)
 
@@ -140,12 +138,11 @@ class MetalKMeans(BaseGPUEstimator):
             return self._fallback_transform(X)
         centers = self._estimator.cluster_centers_  # (k, d)
         # ||x_i - c_j||^2 = ||x_i||^2 + ||c_j||^2 - 2 * x_i · c_j
-        X_norms = np.einsum("ij,ij->i", X, X)[:, np.newaxis]            # (n, 1)
+        X_norms = np.einsum("ij,ij->i", X, X)[:, np.newaxis]  # (n, 1)
         C_norms = np.einsum("ij,ij->i", centers, centers)[np.newaxis, :]  # (1, k)
-        cross = gemm(X, np.ascontiguousarray(centers.T))                 # (n, k)
+        cross = gemm(X, np.ascontiguousarray(centers.T))  # (n, k)
         dists_sq = np.maximum(X_norms + C_norms - 2.0 * cross, 0.0)
         return np.sqrt(dists_sq)
-
 
 
 class MetalDBSCAN(BaseGPUEstimator):

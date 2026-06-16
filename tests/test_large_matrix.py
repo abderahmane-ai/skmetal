@@ -34,8 +34,11 @@ _RNG = np.random.default_rng(42)
 
 def _make_classification(n, d, n_classes=2):
     X, y = datasets.make_classification(
-        n_samples=n, n_features=d, n_classes=n_classes,
-        n_informative=max(d // 2, 1), n_redundant=0,
+        n_samples=n,
+        n_features=d,
+        n_classes=n_classes,
+        n_informative=max(d // 2, 1),
+        n_redundant=0,
         random_state=42,
     )
     return X.astype(np.float32), y
@@ -43,19 +46,26 @@ def _make_classification(n, d, n_classes=2):
 
 def _make_regression(n, d):
     X, y = datasets.make_regression(
-        n_samples=n, n_features=d, noise=0.1, random_state=42,
+        n_samples=n,
+        n_features=d,
+        noise=0.1,
+        random_state=42,
     )
     return X.astype(np.float32), y.astype(np.float32)
 
 
 def _make_blobs(n, d, k=10):
     X, y = datasets.make_blobs(
-        n_samples=n, n_features=d, centers=k, random_state=42,
+        n_samples=n,
+        n_features=d,
+        centers=k,
+        random_state=42,
     )
     return X.astype(np.float32), y
 
 
 # ── Large-classification tests ───────────────────────────────────────────────
+
 
 class TestLargeClassification:
     """100K samples, 100 features — exercises GEMM and iterative solvers."""
@@ -95,7 +105,10 @@ class TestLargeClassification:
     def test_gaussian_nb_fit(self):
         # Use easy data: 5 informative features, 2 classes, no noise
         X, y = datasets.make_classification(
-            n_samples=2000, n_features=20, n_informative=10, n_classes=2,
+            n_samples=2000,
+            n_features=20,
+            n_informative=10,
+            n_classes=2,
             random_state=42,
         )
         model = accelerate(GaussianNB())
@@ -178,6 +191,7 @@ class TestLargeRegression:
 
 # ── Large-unsupervised tests ─────────────────────────────────────────────────
 
+
 class TestLargeUnsupervised:
     """100K samples, 50 features — clustering and decomposition."""
 
@@ -220,6 +234,7 @@ class TestLargeUnsupervised:
 
 # ── Scaler tests (very large — 1M rows) ──────────────────────────────────────
 
+
 class TestLargeScalers:
     N, D = 1_000_000, 100
 
@@ -258,6 +273,7 @@ class TestLargeScalers:
 
 # ── Fat-matrix tests (p >> n) ────────────────────────────────────────────────
 
+
 class TestFatMatrices:
     """Wide matrices — 500 features, only 2000 samples."""
 
@@ -289,6 +305,7 @@ class TestFatMatrices:
 
 
 # ── Tall-skinny tests (n >> d) ───────────────────────────────────────────────
+
 
 class TestTallSkinny:
     """Very tall matrices — 500K samples, 10 features."""
@@ -326,21 +343,27 @@ class TestTallSkinny:
 
 # ── Full benchmark (not assertions, just timing report) ──────────────────────
 
+
 class TestBenchmarkReport:
     """Report GPU timings for large matrices (no pass/fail, just info)."""
 
-    @pytest.mark.parametrize("estimator_cls,kwargs,n,d,has_y", [
-        (LinearRegression, {}, 200_000, 500, True),
-        (Ridge, {"alpha": 1.0}, 200_000, 500, True),
-        (LogisticRegression, {"max_iter": 100, "random_state": 42}, 100_000, 200, True),
-        (KMeans, {"n_clusters": 50, "random_state": 42, "n_init": 1}, 500_000, 100, False),
-    ])
+    @pytest.mark.parametrize(
+        "estimator_cls,kwargs,n,d,has_y",
+        [
+            (LinearRegression, {}, 200_000, 500, True),
+            (Ridge, {"alpha": 1.0}, 200_000, 500, True),
+            (LogisticRegression, {"max_iter": 100, "random_state": 42}, 100_000, 200, True),
+            (KMeans, {"n_clusters": 50, "random_state": 42, "n_init": 1}, 500_000, 100, False),
+        ],
+    )
     def test_gpu_timing(self, estimator_cls, kwargs, n, d, has_y, capsys):
         """Fit on GPU and report elapsed time (no speedup assertion)."""
         X = _RNG.uniform(-1, 1, size=(n, d)).astype(np.float32)
         if has_y:
-            y = _RNG.uniform(-1, 1, size=n).astype(np.float32) if "Logistic" not in estimator_cls.__name__ else (
-                (_RNG.uniform(-1, 1, size=n) > 0).astype(np.float32)
+            y = (
+                _RNG.uniform(-1, 1, size=n).astype(np.float32)
+                if "Logistic" not in estimator_cls.__name__
+                else ((_RNG.uniform(-1, 1, size=n) > 0).astype(np.float32))
             )
         else:
             y = None

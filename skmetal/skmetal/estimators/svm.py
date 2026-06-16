@@ -52,9 +52,7 @@ class _BaseMetalSVM(BaseGPUEstimator):
         svc_predict_binary(X, X_sv, dual_coef, intercept, output, gamma)
 
     def _is_binary_rbf(self):
-        return (self._saved_kernel == "rbf"
-                and self._estimator is not None
-                and len(self._estimator.classes_) == 2)
+        return self._saved_kernel == "rbf" and self._estimator is not None and len(self._estimator.classes_) == 2
 
     def _compute_test_kernel(self, X):
         n_test, d = X.shape

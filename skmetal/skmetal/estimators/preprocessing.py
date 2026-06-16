@@ -65,8 +65,7 @@ class MetalMinMaxScaler(BaseGPUEstimator):
             return self._fallback_transform(X)
         fmin, fmax = self._estimator.feature_range
         output = np.empty_like(X)
-        minmax_transform(X, output, self._estimator.data_min_,
-                        self._estimator.data_max_, fmin, fmax)
+        minmax_transform(X, output, self._estimator.data_min_, self._estimator.data_max_, fmin, fmax)
         return output
 
 
@@ -90,7 +89,6 @@ class MetalRobustScaler(BaseGPUEstimator):
         self._estimator.n_features_in_ = n_features
         self._fitted = True
         return self
-
 
     def transform(self, X):
         X = self._validate_data(X)[0]

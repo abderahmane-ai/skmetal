@@ -7,11 +7,25 @@ from sklearn.ensemble import HistGradientBoostingClassifier as _SKHistGradientBo
 
 # All constructor parameters shared between HGBT Regressor and Classifier.
 _HGBT_PARAMS = [
-    "loss", "learning_rate", "max_iter", "max_leaf_nodes", "max_depth",
-    "min_samples_leaf", "l2_regularization", "max_bins",
-    "categorical_features", "monotonic_cst", "interaction_cst",
-    "warm_start", "early_stopping", "scoring", "validation_fraction",
-    "n_iter_no_change", "tol", "verbose", "random_state",
+    "loss",
+    "learning_rate",
+    "max_iter",
+    "max_leaf_nodes",
+    "max_depth",
+    "min_samples_leaf",
+    "l2_regularization",
+    "max_bins",
+    "categorical_features",
+    "monotonic_cst",
+    "interaction_cst",
+    "warm_start",
+    "early_stopping",
+    "scoring",
+    "validation_fraction",
+    "n_iter_no_change",
+    "tol",
+    "verbose",
+    "random_state",
 ]
 
 
@@ -94,10 +108,17 @@ class MetalHistGradientBoostingBase(BaseGPUEstimator):
         n = X.shape[0]
         predictions = np.empty(n, dtype=np.float32)
         tree_predict_all(
-            X, self._flat_values, self._flat_feature,
-            self._flat_threshold, self._flat_left, self._flat_right,
-            self._flat_is_leaf, self._tree_offsets, self._tree_n_nodes,
-            self._baseline_val, predictions,
+            X,
+            self._flat_values,
+            self._flat_feature,
+            self._flat_threshold,
+            self._flat_left,
+            self._flat_right,
+            self._flat_is_leaf,
+            self._tree_offsets,
+            self._tree_n_nodes,
+            self._baseline_val,
+            predictions,
         )
         return predictions
 

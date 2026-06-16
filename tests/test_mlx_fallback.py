@@ -22,7 +22,10 @@ _RNG = np.random.default_rng(42)
 
 def _make_data(n=200, d=10):
     X, y = datasets.make_classification(
-        n_samples=n, n_features=d, n_classes=2, random_state=42,
+        n_samples=n,
+        n_features=d,
+        n_classes=2,
+        random_state=42,
     )
     return X.astype(np.float32), y
 
@@ -60,7 +63,7 @@ class TestMLXThresholdFallback:
         get_config().device = "gpu"
 
     def test_threshold_huge_forces_cpu(self):
-        get_config().threshold = 10 ** 15
+        get_config().threshold = 10**15
         X, y = _make_data()
         gpu = accelerate(LogisticRegression(max_iter=100, random_state=42))
         gpu.fit(X, y)
@@ -71,7 +74,7 @@ class TestMLXThresholdFallback:
 
     def test_per_estimator_threshold_forces_cpu(self):
         thresh = dict(get_config().thresholds)
-        thresh["LogisticRegression"] = (10 ** 9, 10 ** 9)
+        thresh["LogisticRegression"] = (10**9, 10**9)
         get_config().thresholds = thresh
         X, y = _make_data()
         gpu = accelerate(LogisticRegression(max_iter=100, random_state=42))
@@ -104,4 +107,5 @@ class TestMLXImportProtection:
 
     def test_mlx_svd_imports(self):
         from skmetal.estimators._mlx_svd import MetalTruncatedSVDMLX
+
         assert MetalTruncatedSVDMLX is not None

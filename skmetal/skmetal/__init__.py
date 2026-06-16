@@ -44,19 +44,29 @@ Check ``skmetal.METAL_AVAILABLE`` at runtime to detect GPU support.
 """
 
 from ._about import __version__, __version_info__
-from ._config import get_config, set_device, set_threshold, set_dtype, set_verbose, set_thresholds, update_threshold, reset_thresholds
+from ._config import (
+    get_config,
+    set_device,
+    set_threshold,
+    set_dtype,
+    set_verbose,
+    set_thresholds,
+    update_threshold,
+    reset_thresholds,
+)
 from .accelerate import accelerate, accelerate_context
 from ._bridge import METAL_AVAILABLE
 
 if METAL_AVAILABLE:
     from ._bridge import device_info
 else:
+
     def device_info() -> dict:  # type: ignore[misc]
         """Returns empty info when Metal is unavailable."""
         raise RuntimeError(
-            "skmetal: device_info() requires Apple Silicon + macOS 14+. "
-            "Metal is not available on this device."
+            "skmetal: device_info() requires Apple Silicon + macOS 14+. Metal is not available on this device."
         )
+
 
 __all__ = [
     "__version__",
@@ -74,4 +84,3 @@ __all__ = [
     "update_threshold",
     "reset_thresholds",
 ]
-

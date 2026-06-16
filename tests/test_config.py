@@ -1,4 +1,5 @@
 """Tests for skmetal configuration API."""
+
 import pytest
 from skmetal._config import get_config, set_device, set_threshold, set_dtype, set_verbose, set_thresholds
 

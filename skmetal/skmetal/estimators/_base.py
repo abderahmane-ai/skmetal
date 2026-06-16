@@ -34,19 +34,22 @@ class BaseGPUEstimator(BaseEstimator):
         n, d = X.shape
         if n * d < config.threshold:
             if config.verbose:
-                print(f"[skmetal] {type(self).__name__}: device=cpu ({n}×{d} = {n*d:,} < {config.threshold:,} threshold)")
+                print(
+                    f"[skmetal] {type(self).__name__}: device=cpu ({n}×{d} = {n * d:,} < {config.threshold:,} threshold)"
+                )
             return False
         name = type(self._estimator).__name__ if self._estimator else type(self).__name__
         if name in config.thresholds:
             min_rows, min_cols = config.thresholds[name]
             if n < min_rows or d < min_cols:
                 if config.verbose:
-                    print(f"[skmetal] {type(self).__name__}: device=cpu ({n}×{d} < per-estimator min {min_rows}×{min_cols})")
+                    print(
+                        f"[skmetal] {type(self).__name__}: device=cpu ({n}×{d} < per-estimator min {min_rows}×{min_cols})"
+                    )
                 return False
         if config.verbose:
             print(f"[skmetal] {type(self).__name__}: device=gpu ({n}×{d})")
         return True
-
 
     def _fallback_fit(self, X, y, **kwargs):
         self._estimator.fit(X, y, **kwargs)
@@ -79,7 +82,7 @@ class BaseGPUEstimator(BaseEstimator):
         return self._fitted
 
     def __getattr__(self, name):
-        if name in ('_estimator', '_fitted'):
+        if name in ("_estimator", "_fitted"):
             raise AttributeError(name)
         if self._estimator is not None and hasattr(self._estimator, name):
             return getattr(self._estimator, name)

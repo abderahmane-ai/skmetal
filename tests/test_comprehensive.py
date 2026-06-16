@@ -36,7 +36,10 @@ _RNG = np.random.default_rng(42)
 
 def _make_data(n=2000, d=50):
     X, y = datasets.make_classification(
-        n_samples=n, n_features=d, n_classes=2, random_state=42,
+        n_samples=n,
+        n_features=d,
+        n_classes=2,
+        random_state=42,
     )
     return X.astype(np.float32), y
 
@@ -44,6 +47,7 @@ def _make_data(n=2000, d=50):
 # ═══════════════════════════════════════════════════════════════════════════════
 # Config and device tests
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestDeviceConfig:
     """Force CPU/GPU device and verify routing."""
@@ -70,6 +74,7 @@ class TestDeviceConfig:
         gpu_model.fit(X, y)
         # Should have fallen back to CPU sklearn
         from sklearn.linear_model import LogisticRegression as LR
+
         cpu = LR(max_iter=100, random_state=42)
         cpu.fit(X, y)
         np.testing.assert_allclose(gpu_model.coef_, cpu.coef_, rtol=1e-5, atol=1e-6)
@@ -81,10 +86,14 @@ class TestDeviceConfig:
         pipe.fit(X, y)
         from sklearn.linear_model import LogisticRegression as LR
         from sklearn.preprocessing import StandardScaler as SS
+
         cpu = make_pipeline(SS(), LR(max_iter=100, random_state=42))
         cpu.fit(X, y)
         np.testing.assert_allclose(
-            pipe.predict_proba(X), cpu.predict_proba(X), rtol=0.5, atol=1.0,
+            pipe.predict_proba(X),
+            cpu.predict_proba(X),
+            rtol=0.5,
+            atol=1.0,
         )
 
 
@@ -110,6 +119,7 @@ class TestThresholdBoundaries:
         model = accelerate(LinearRegression())
         model.fit(X, y)
         from sklearn.linear_model import LinearRegression as LR
+
         cpu = LR()
         cpu.fit(X, y)
         np.testing.assert_allclose(model.coef_, cpu.coef_, rtol=1e-6)
@@ -142,6 +152,7 @@ class TestThresholdBoundaries:
 # ═══════════════════════════════════════════════════════════════════════════════
 # n_init tests
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestNInit:
     """n_init='auto' and multi-init consistency."""
@@ -187,6 +198,7 @@ class TestNInit:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Dtype and shape validation
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestDtypeValidation:
     """GPU estimators accept float16/float64/int (sklearn's check_array converts).
@@ -242,6 +254,7 @@ class TestDtypeValidation:
 # Single-sample and single-feature edge cases
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestEdgeCases:
     """Minimal data: 2 samples, 1 feature, constant features, etc."""
 
@@ -262,20 +275,24 @@ class TestEdgeCases:
 
     def test_constant_feature(self):
         """A column with all same value should not crash scaler."""
-        X = np.column_stack([
-            np.random.randn(100).astype(np.float32),
-            np.ones(100, dtype=np.float32),
-        ])
+        X = np.column_stack(
+            [
+                np.random.randn(100).astype(np.float32),
+                np.ones(100, dtype=np.float32),
+            ]
+        )
         model = accelerate(StandardScaler())
         model.fit(X)
         # Variance of constant column is zero; scale may be 0 or 1
         assert np.isfinite(model.scale_).all()
 
     def test_constant_feature_logreg(self):
-        X = np.column_stack([
-            np.random.randn(100).astype(np.float32),
-            np.ones(100, dtype=np.float32),
-        ])
+        X = np.column_stack(
+            [
+                np.random.randn(100).astype(np.float32),
+                np.ones(100, dtype=np.float32),
+            ]
+        )
         y = (_RNG.uniform(0, 1, size=100) > 0.5).astype(np.float32)
         model = accelerate(LogisticRegression(max_iter=100, random_state=42))
         # Should converge — constant column handled by the optimizer
@@ -322,6 +339,7 @@ class TestEdgeCases:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Transformer API tests
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestTransformerAPI:
     """fit_transform, fit_predict, and transform consistency."""
@@ -370,6 +388,7 @@ class TestTransformerAPI:
 # Re-fitting and convergence tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestRefitting:
     """Re-fitting should change internal state."""
 
@@ -413,12 +432,14 @@ class TestRefitting:
 # Pipeline edge cases
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestPipelines:
     """Pipeline composition: partial wrapping, nested, step access."""
 
     def test_partial_pipeline(self):
         """Unsupported step in pipeline left as-is."""
         from sklearn.decomposition import PCA
+
         pipe = make_pipeline(StandardScaler(), PCA(n_components=5), LogisticRegression(max_iter=100, random_state=42))
         wrapped = accelerate(pipe)
         assert hasattr(wrapped, "fit")
@@ -447,6 +468,7 @@ class TestPipelines:
     def test_already_wrapped_pipeline(self):
         """Wrapping an already wrapped pipeline is idempotent (same number of steps)."""
         from skmetal import accelerate
+
         pipe = make_pipeline(StandardScaler(), LogisticRegression(max_iter=100))
         wrapped = accelerate(pipe)
         double_wrapped = accelerate(wrapped)
@@ -456,6 +478,7 @@ class TestPipelines:
 # ═══════════════════════════════════════════════════════════════════════════════
 # dtype fallback consistency (GPU vs CPU produce same results)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestGPUvsCPUConsistency:
     """GPU and CPU sklearn produce the same model on the same data."""
@@ -481,8 +504,14 @@ class TestGPUvsCPUConsistency:
 
     def test_logistic_regression(self):
         X, y = datasets.make_classification(n_samples=500, n_features=20, random_state=42)
-        self._check(LogisticRegression, {"max_iter": 200, "random_state": 42},
-                    X.astype(np.float32), y.astype(np.float32), rtol=0.5, atol=0.5)
+        self._check(
+            LogisticRegression,
+            {"max_iter": 200, "random_state": 42},
+            X.astype(np.float32),
+            y.astype(np.float32),
+            rtol=0.5,
+            atol=0.5,
+        )
 
     def test_standard_scaler(self):
         X = _RNG.uniform(-5, 5, size=(500, 20)).astype(np.float32)
@@ -509,18 +538,19 @@ class TestGPUvsCPUConsistency:
 # Attribute consistency
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestAttributeConsistency:
     """All expected attributes exist after fit."""
 
     REQUIRED_ATTRS = {
-            "LinearRegression": ["coef_", "intercept_", "n_features_in_"],
-            "Ridge": ["coef_", "intercept_", "n_features_in_"],
-            "LogisticRegression": ["coef_", "intercept_", "classes_", "n_features_in_"],
-            "KMeans": ["cluster_centers_", "labels_", "inertia_", "n_iter_", "n_features_in_"],
-            "StandardScaler": ["mean_", "scale_", "var_", "n_features_in_"],
-            "MinMaxScaler": ["min_", "scale_", "data_min_", "data_max_", "n_features_in_"],
-            "TruncatedSVD": ["components_", "explained_variance_ratio_", "singular_values_", "n_features_in_"],
-        }
+        "LinearRegression": ["coef_", "intercept_", "n_features_in_"],
+        "Ridge": ["coef_", "intercept_", "n_features_in_"],
+        "LogisticRegression": ["coef_", "intercept_", "classes_", "n_features_in_"],
+        "KMeans": ["cluster_centers_", "labels_", "inertia_", "n_iter_", "n_features_in_"],
+        "StandardScaler": ["mean_", "scale_", "var_", "n_features_in_"],
+        "MinMaxScaler": ["min_", "scale_", "data_min_", "data_max_", "n_features_in_"],
+        "TruncatedSVD": ["components_", "explained_variance_ratio_", "singular_values_", "n_features_in_"],
+    }
 
     def test_all_estimators_have_expected_attrs(self):
         X, y = _make_data(500, 20)
@@ -528,7 +558,9 @@ class TestAttributeConsistency:
             cls = globals().get(name)
             if cls is None:
                 continue
-            model = accelerate(cls(**{"random_state": 42} if "random_state" in str(cls.__init__.__code__.co_varnames) else {}))
+            model = accelerate(
+                cls(**{"random_state": 42} if "random_state" in str(cls.__init__.__code__.co_varnames) else {})
+            )
             if name in ("LinearRegression", "Ridge"):
                 model.fit(X, y)
             elif name in ("LogisticRegression",):

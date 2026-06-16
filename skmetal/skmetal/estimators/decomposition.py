@@ -6,8 +6,7 @@ from .._bridge import gemm
 
 
 class MetalTruncatedSVD(BaseGPUEstimator):
-    """GPU-accelerated TruncatedSVD via randomized SVD (Cholesky QR, all BLAS-3).
-    """
+    """GPU-accelerated TruncatedSVD via randomized SVD (Cholesky QR, all BLAS-3)."""
 
     def fit(self, X, y=None, **kwargs):
         X, _ = self._validate_data(X, y)

@@ -1,4 +1,5 @@
 """MLX-accelerated TruncatedSVD — GPU SVD via mlx.linalg.svd."""
+
 import numpy as np
 from scipy import linalg
 from sklearn.utils.extmath import svd_flip
@@ -15,8 +16,7 @@ _HAS_MLX = has_mlx()
 
 if _HAS_MLX:
 
-    def _mlx_matmul(A: np.ndarray, B: np.ndarray, trans_A: bool = False,
-                    trans_B: bool = False) -> np.ndarray:
+    def _mlx_matmul(A: np.ndarray, B: np.ndarray, trans_A: bool = False, trans_B: bool = False) -> np.ndarray:
         """MLX-native GEMM — uses mx.array ops directly (no ctypes/dylib)."""
         A_mx = mx.array(A if not trans_A else A.T, dtype=mx.float32)
         B_mx = mx.array(B if not trans_B else B.T, dtype=mx.float32)

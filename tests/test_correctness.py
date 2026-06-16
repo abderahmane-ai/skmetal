@@ -25,17 +25,31 @@ pytestmark = [
 ]
 
 
-SKIP_ATTRS = {"n_iter_", "n_features_in_", "n_features_out_", "n_samples_seen_",
-               "_fit_X", "_y", "n_samples_fit_",
-               "support_vectors_", "support_", "n_support_",
-               "dual_coef_", "intercept_", "probA_", "probB_",
-               "shape_fit_", "n_features_in_"}
+SKIP_ATTRS = {
+    "n_iter_",
+    "n_features_in_",
+    "n_features_out_",
+    "n_samples_seen_",
+    "_fit_X",
+    "_y",
+    "n_samples_fit_",
+    "support_vectors_",
+    "support_",
+    "n_support_",
+    "dual_coef_",
+    "intercept_",
+    "probA_",
+    "probB_",
+    "shape_fit_",
+    "n_features_in_",
+}
 
 
 def _match_clusters(gpu_centers, cpu_centers):
     """Match GPU cluster centers to CPU centers via Hungarian assignment."""
     from scipy.optimize import linear_sum_assignment
     from sklearn.metrics import pairwise_distances
+
     cost = pairwise_distances(gpu_centers, cpu_centers)
     row_ind, col_ind = linear_sum_assignment(cost)
     return gpu_centers[row_ind]
@@ -75,48 +89,51 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
             assert abs(gpu_val - cpu_val) <= atol + rtol * abs(cpu_val)
 
 
-@pytest.mark.parametrize("EstimatorCls, data_fn, has_y", [
-    (LinearRegression,
-     lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
-    (Ridge,
-     lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
-    (LogisticRegression,
-     lambda: make_classification(n_samples=2000, n_features=50, random_state=42), True),
-    (LogisticRegression,  # multi-class (exercises multinomial_lbfgs_fit)
-     lambda: make_classification(n_samples=2000, n_features=50, n_classes=3, n_informative=10, random_state=42), True),
-    (TruncatedSVD,
-     lambda: make_regression(n_samples=2000, n_features=100, random_state=42), False),
-    (KMeans,
-     lambda: make_blobs(n_samples=2000, centers=10, n_features=50, random_state=42), False),
-    (StandardScaler,
-     lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
-    (MinMaxScaler,
-     lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
-    (RobustScaler,
-     lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
-    (Lasso,
-     lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
-    (KNeighborsClassifier,
-     lambda: make_classification(n_samples=2000, n_features=20, n_informative=10, random_state=42), True),
-    (KNeighborsRegressor,
-     lambda: make_regression(n_samples=2000, n_features=20, noise=0.1, random_state=42), True),
-    (ElasticNet,
-     lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
-    (GaussianNB,
-     lambda: make_classification(n_samples=2000, n_features=20, n_informative=10, random_state=42), True),
-    (DBSCAN,
-     lambda: make_blobs(n_samples=2000, centers=5, n_features=10, cluster_std=0.5, random_state=42), False),
-    (HistGradientBoostingRegressor,
-     lambda: make_regression(n_samples=500, n_features=20, noise=0.1, random_state=42), True),
-    (HistGradientBoostingClassifier,
-     lambda: make_classification(n_samples=500, n_features=20, random_state=42), True),
-    (SVC,
-     lambda: make_classification(n_samples=500, n_features=20, random_state=42), True),
-    (SVR,
-     lambda: make_regression(n_samples=500, n_features=20, noise=0.1, random_state=42), True),
-    (NearestNeighbors,
-     lambda: make_regression(n_samples=1000, n_features=20, noise=0.1, random_state=42), False),
-])
+@pytest.mark.parametrize(
+    "EstimatorCls, data_fn, has_y",
+    [
+        (LinearRegression, lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
+        (Ridge, lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
+        (LogisticRegression, lambda: make_classification(n_samples=2000, n_features=50, random_state=42), True),
+        (
+            LogisticRegression,  # multi-class (exercises multinomial_lbfgs_fit)
+            lambda: make_classification(n_samples=2000, n_features=50, n_classes=3, n_informative=10, random_state=42),
+            True,
+        ),
+        (TruncatedSVD, lambda: make_regression(n_samples=2000, n_features=100, random_state=42), False),
+        (KMeans, lambda: make_blobs(n_samples=2000, centers=10, n_features=50, random_state=42), False),
+        (StandardScaler, lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
+        (MinMaxScaler, lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
+        (RobustScaler, lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
+        (Lasso, lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
+        (
+            KNeighborsClassifier,
+            lambda: make_classification(n_samples=2000, n_features=20, n_informative=10, random_state=42),
+            True,
+        ),
+        (KNeighborsRegressor, lambda: make_regression(n_samples=2000, n_features=20, noise=0.1, random_state=42), True),
+        (ElasticNet, lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
+        (
+            GaussianNB,
+            lambda: make_classification(n_samples=2000, n_features=20, n_informative=10, random_state=42),
+            True,
+        ),
+        (DBSCAN, lambda: make_blobs(n_samples=2000, centers=5, n_features=10, cluster_std=0.5, random_state=42), False),
+        (
+            HistGradientBoostingRegressor,
+            lambda: make_regression(n_samples=500, n_features=20, noise=0.1, random_state=42),
+            True,
+        ),
+        (
+            HistGradientBoostingClassifier,
+            lambda: make_classification(n_samples=500, n_features=20, random_state=42),
+            True,
+        ),
+        (SVC, lambda: make_classification(n_samples=500, n_features=20, random_state=42), True),
+        (SVR, lambda: make_regression(n_samples=500, n_features=20, noise=0.1, random_state=42), True),
+        (NearestNeighbors, lambda: make_regression(n_samples=1000, n_features=20, noise=0.1, random_state=42), False),
+    ],
+)
 def test_estimator_correctness(EstimatorCls, data_fn, has_y):
     """Compare GPU-accelerated estimator against CPU baseline."""
     X, y = data_fn()
@@ -147,7 +164,7 @@ def test_estimator_correctness(EstimatorCls, data_fn, has_y):
     else:
         gpu_model.fit(X)
 
-    gpu_obj = gpu_model._estimator if hasattr(gpu_model, '_estimator') else gpu_model
+    gpu_obj = gpu_model._estimator if hasattr(gpu_model, "_estimator") else gpu_model
     _check_attrs(gpu_obj, cpu_model, estimator_cls=EstimatorCls)
 
     # For SVC/SVR: verify prediction accuracy against CPU
@@ -180,21 +197,25 @@ def test_pipeline_correctness():
     X = X.astype(np.float32)
     y = y.astype(np.float32)
 
-    pipe_cpu = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LogisticRegression()),
-    ])
+    pipe_cpu = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression()),
+        ]
+    )
     pipe_cpu.fit(X, y)
 
-    pipe_gpu = skmetal.accelerate(Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LogisticRegression()),
-    ]))
+    pipe_gpu = skmetal.accelerate(
+        Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("clf", LogisticRegression()),
+            ]
+        )
+    )
     pipe_gpu.fit(X, y)
 
-    np.testing.assert_allclose(
-        pipe_gpu.predict_proba(X), pipe_cpu.predict_proba(X), rtol=0.5, atol=1.0
-    )
+    np.testing.assert_allclose(pipe_gpu.predict_proba(X), pipe_cpu.predict_proba(X), rtol=0.5, atol=1.0)
 
 
 def test_device_info():

@@ -41,8 +41,7 @@ class MetalLinearRegression(_BaseMetalLinear):
         ridge_fit_solve(X, y, X_mean, coef, alpha=0.0)
 
         self._estimator.coef_ = coef
-        self._estimator.intercept_ = self._compute_intercept(
-            y.mean(), X_mean, coef, self._estimator.fit_intercept)
+        self._estimator.intercept_ = self._compute_intercept(y.mean(), X_mean, coef, self._estimator.fit_intercept)
         self._fitted = True
         return self
 
@@ -61,8 +60,7 @@ class MetalRidge(_BaseMetalLinear):
         ridge_fit_solve(X, y, X_mean, coef, self._estimator.alpha)
 
         self._estimator.coef_ = coef
-        self._estimator.intercept_ = self._compute_intercept(
-            y.mean(), X_mean, coef, self._estimator.fit_intercept)
+        self._estimator.intercept_ = self._compute_intercept(y.mean(), X_mean, coef, self._estimator.fit_intercept)
         self._fitted = True
         return self
 

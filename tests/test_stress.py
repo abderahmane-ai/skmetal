@@ -24,6 +24,7 @@ pytestmark = [
 # dtype rejection
 # ===========================================================================
 
+
 class TestDtypeRejection:
     def test_gemm_f64_rejected(self):
         A = np.ones((2, 3), dtype=np.float64)
@@ -42,6 +43,7 @@ class TestDtypeRejection:
 # Contiguity rejection
 # ===========================================================================
 
+
 class TestContiguityRejection:
     def test_gemm_non_contiguous_rejected(self):
         A = np.ones((2, 3), dtype=np.float32).T
@@ -54,6 +56,7 @@ class TestContiguityRejection:
 # Shape validation
 # ===========================================================================
 
+
 class TestShapeValidation:
     def test_gemm_incompatible_dims(self):
         A = np.ones((2, 3), dtype=np.float32)
@@ -62,12 +65,10 @@ class TestShapeValidation:
             gemm(A, B)
 
 
-
-
-
 # ===========================================================================
 # Estimator-level edge cases (via accelerate)
 # ===========================================================================
+
 
 class TestEstimatorEdgeCases:
     def test_single_feature_regression(self):
@@ -75,6 +76,7 @@ class TestEstimatorEdgeCases:
         X = X.astype(np.float32)
         y = y.astype(np.float32)
         from skmetal import accelerate
+
         model = accelerate(LinearRegression())
         model.fit(X, y)
         preds = model.predict(X)
@@ -85,6 +87,7 @@ class TestEstimatorEdgeCases:
         X = np.array([[1.0], [2.0]], dtype=np.float32)
         y = np.array([1.0, 2.0], dtype=np.float32)
         from skmetal import accelerate
+
         model = accelerate(LinearRegression())
         model.fit(X, y)
         preds = model.predict(X)
@@ -94,6 +97,7 @@ class TestEstimatorEdgeCases:
         X = np.ones((100, 5), dtype=np.float32)
         y = np.random.randn(100).astype(np.float32)
         from skmetal import accelerate
+
         model = accelerate(Ridge(alpha=1.0))
         model.fit(X, y)
         preds = model.predict(X)
@@ -104,6 +108,7 @@ class TestEstimatorEdgeCases:
         X = np.tile(rng.randn(1, 10).astype(np.float32), (100, 1))
         y = np.ones(100, dtype=np.float32)
         from skmetal import accelerate
+
         model = accelerate(LinearRegression())
         model.fit(X, y)
         preds = model.predict(X)
@@ -113,18 +118,19 @@ class TestEstimatorEdgeCases:
         X = np.random.randn(10, 500).astype(np.float32)
         y = np.ones(10, dtype=np.float32)
         from skmetal import accelerate
+
         model = accelerate(Ridge(alpha=10.0))
         model.fit(X, y)
         preds = model.predict(X)
         assert preds.shape == (10,)
 
     def test_binary_classification(self):
-        X, y = make_classification(n_samples=200, n_features=10, n_classes=2,
-                                    random_state=42)
+        X, y = make_classification(n_samples=200, n_features=10, n_classes=2, random_state=42)
         X = X.astype(np.float32)
         y = y.astype(np.float32)
         from sklearn.linear_model import LogisticRegression
         from skmetal import accelerate
+
         model = accelerate(LogisticRegression(random_state=42))
         model.fit(X, y)
         preds = model.predict(X)
@@ -137,14 +143,20 @@ class TestEstimatorEdgeCases:
 # Accelerator edge cases
 # ===========================================================================
 
+
 class TestAcceleratorEdgeCases:
     def test_accelerate_in_pipeline_works(self):
         from sklearn.pipeline import Pipeline
         from skmetal import accelerate
-        pipe = accelerate(Pipeline([
-            ("scaler", StandardScaler()),
-            ("clf", LinearRegression()),
-        ]))
+
+        pipe = accelerate(
+            Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("clf", LinearRegression()),
+                ]
+            )
+        )
         X, y = make_regression(n_samples=100, n_features=5, random_state=42)
         X = X.astype(np.float32)
         y = y.astype(np.float32)
@@ -153,6 +165,7 @@ class TestAcceleratorEdgeCases:
 
     def test_fit_twice_same_instance(self):
         from skmetal import accelerate
+
         model = accelerate(LinearRegression())
         X1, y1 = make_regression(n_samples=100, n_features=5, random_state=1)
         X2, y2 = make_regression(n_samples=100, n_features=5, random_state=2)
@@ -164,8 +177,10 @@ class TestAcceleratorEdgeCases:
 
     def test_set_device_cpu_fallback(self):
         import skmetal
+
         skmetal.set_device("cpu")
         from sklearn.linear_model import LogisticRegression
+
         model = skmetal.accelerate(LogisticRegression(random_state=42))
         X, y = make_classification(n_samples=100, n_features=5, random_state=42)
         model.fit(X.astype(np.float32), y.astype(np.float32))
@@ -177,11 +192,13 @@ class TestAcceleratorEdgeCases:
 # Regression: known issues that should not reappear
 # ===========================================================================
 
+
 class TestRegressionBugs:
     def test_binary_predict_not_all_class_zero(self):
         """Binary LogisticRegression predict should not always return class 0."""
         from sklearn.linear_model import LogisticRegression
         from skmetal import accelerate
+
         rng = np.random.RandomState(42)
         X = np.hstack([rng.randn(50, 5), np.ones((50, 1)) * 10])  # separable-ish
         X = X.astype(np.float32)

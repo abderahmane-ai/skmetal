@@ -21,11 +21,10 @@ pytestmark = [
 # Distance kernels
 # ===========================================================================
 
+
 class TestDistanceKernels:
     def test_pairwise_distance_identity(self):
-        X = np.array([[1.0, 0.0],
-                      [0.0, 1.0],
-                      [1.0, 1.0]], dtype=np.float32)
+        X = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=np.float32)
         D = _bridge.pairwise_distance(X)
         assert D.shape == (3, 3)
         np.testing.assert_allclose(np.diag(D), [0.0, 0.0, 0.0], atol=1e-5)
@@ -33,9 +32,7 @@ class TestDistanceKernels:
         np.testing.assert_allclose(D[0, 2], 1.0, rtol=1e-5)
 
     def test_pairwise_distance_symmetric(self):
-        X = np.array([[0.0, 0.0],
-                      [3.0, 4.0],
-                      [1.0, 2.0]], dtype=np.float32)
+        X = np.array([[0.0, 0.0], [3.0, 4.0], [1.0, 2.0]], dtype=np.float32)
         D = _bridge.pairwise_distance(X)
         assert np.allclose(D, D.T, rtol=1e-5), "Distance matrix must be symmetric"
 
@@ -44,11 +41,10 @@ class TestDistanceKernels:
 # Centering / scaling kernels
 # ===========================================================================
 
+
 class TestCenterKernels:
     def test_scaler_fit_known(self):
-        X = np.array([[1.0, 2.0],
-                      [3.0, 4.0],
-                      [5.0, 6.0]], dtype=np.float32)
+        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
         mean_out = np.empty(2, dtype=np.float32)
         var_out = np.empty(2, dtype=np.float32)
         _bridge.scaler_fit(X, mean_out, var_out)
@@ -64,10 +60,7 @@ class TestCenterKernels:
         np.testing.assert_allclose(var_out, [0.0, 0.0, 0.0], atol=1e-5)
 
     def test_column_minmax_basic(self):
-        X = np.array([[3.0, 8.0],
-                      [1.0, 6.0],
-                      [4.0, 9.0],
-                      [0.0, 7.0]], dtype=np.float32)
+        X = np.array([[3.0, 8.0], [1.0, 6.0], [4.0, 9.0], [0.0, 7.0]], dtype=np.float32)
         min_out = np.empty(2, dtype=np.float32)
         max_out = np.empty(2, dtype=np.float32)
         _bridge.column_minmax(X, min_out, max_out)
@@ -83,9 +76,7 @@ class TestCenterKernels:
         assert max_out[0] == pytest.approx(5.0, abs=1e-5)
 
     def test_column_transform(self):
-        X = np.array([[1.0, 2.0],
-                      [3.0, 4.0],
-                      [5.0, 6.0]], dtype=np.float32)
+        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
         center = np.array([3.0, 4.0], dtype=np.float32)
         scale = np.array([2.0, 0.5], dtype=np.float32)
         out = np.empty_like(X)
@@ -98,14 +89,11 @@ class TestCenterKernels:
 # KMeans kernels
 # ===========================================================================
 
+
 class TestKMeansKernels:
     def test_kmeans_assign(self):
-        X = np.array([[0.0, 0.0],
-                      [1.0, 1.0],
-                      [10.0, 10.0],
-                      [9.0, 9.0]], dtype=np.float32)
-        centroids = np.array([[0.0, 0.0],
-                              [10.0, 10.0]], dtype=np.float32)
+        X = np.array([[0.0, 0.0], [1.0, 1.0], [10.0, 10.0], [9.0, 9.0]], dtype=np.float32)
+        centroids = np.array([[0.0, 0.0], [10.0, 10.0]], dtype=np.float32)
         assignments = np.empty(4, dtype=np.int32)
         _bridge.kmeans_assign(X, centroids, assignments, 4, 2, 2)
         np.testing.assert_array_equal(assignments, [0, 0, 1, 1])
@@ -125,26 +113,22 @@ class TestKMeansKernels:
 # GEMM kernel
 # ===========================================================================
 
+
 class TestGEMMKernels:
     def test_gemm_identity(self):
         A = np.eye(3, dtype=np.float32)
-        B = np.array([[1.0, 2.0, 3.0],
-                      [4.0, 5.0, 6.0],
-                      [7.0, 8.0, 9.0]], dtype=np.float32)
+        B = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float32)
         C = _bridge.gemm(A, B)
         np.testing.assert_allclose(C, B, rtol=1e-5)
 
     def test_gemm_matrix_vector(self):
-        A = np.array([[1.0, 2.0],
-                      [3.0, 4.0],
-                      [5.0, 6.0]], dtype=np.float32)
+        A = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
         B = np.array([[1.0], [0.0]], dtype=np.float32)
         C = _bridge.gemm(A, B)
         np.testing.assert_allclose(C, [[1.0], [3.0], [5.0]], rtol=1e-5)
 
     def test_gemm_transpose(self):
-        A = np.array([[1.0, 2.0, 3.0],
-                      [4.0, 5.0, 6.0]], dtype=np.float32)
+        A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
         B = np.eye(2, dtype=np.float32)
         C = _bridge.gemm(A, B, trans_A=True)
         expected = A.T @ B

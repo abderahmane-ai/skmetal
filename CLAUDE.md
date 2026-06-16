@@ -33,6 +33,24 @@ Tests run from `skmetal/` dir (tests are at `../tests/` relative to it). `confte
 2. Build wheel: `cd skmetal && python3 -m build --wheel`
 3. Commit, tag, push — CI/CD auto-pushes to PyPI on tag. **Do not use twine.**
 
+## graphify — always explore the codebase with graphify first
+
+**Before any codebase exploration or modification**, use the graphify knowledge graph. Run `/graphify` to invoke the skill — it provides queryable, indexed knowledge of the entire codebase with community detection and cross-file relationships.
+
+**Mandatory workflow:**
+1. **For codebase questions** — run `graphify query "<question>"` before raw grep/file search. Returns a scoped subgraph, typically much smaller than GRAPH_REPORT.md or raw search output.
+2. **For relationships** — use `graphify path "<A>" "<B>"` to trace dependencies between concepts.
+3. **For focused concepts** — use `graphify explain "<concept>"` for plain-language explanation of a node.
+4. **For broad navigation** — use `graphify-out/wiki/index.md` to browse by community instead of raw source.
+5. **After code changes** — run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+**Only skip graphify if:**
+- The graph output is stale or incorrect (and you're about to regenerate it)
+- The task is a trivial single-line fix in a known file
+- The user explicitly tells you not to use it
+
+Graph files live at `graphify-out/`. Dirty files after hooks or incremental updates are expected — dirty state is not a reason to skip graphify.
+
 ## Architecture
 
 skmetal is a 4-layer stack that executes scikit-learn estimators on Apple Silicon GPUs:
@@ -98,5 +116,3 @@ Key kernel families: `KMeansKernels.metal` (assign/accumulate/combine), `KNNKern
 ## GPU acceleration research
 `GPU_ACCELERATION_RESEARCH.md` at project root contains the definitive reference for GPU/Metal/MLX implementation decisions. Read it before starting any GPU work.
 
-## graphify
-This project has a knowledge graph at `graphify-out/`. For codebase questions, use `graphify query`, `graphify path`, or `graphify explain` before raw file search. Use `graphify-out/wiki/index.md` for broad navigation. Run `graphify update .` after code changes to keep the graph current.

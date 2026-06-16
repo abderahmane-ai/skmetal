@@ -48,8 +48,5 @@ def _wrap_pipeline(pipeline):
     PIPELINE_PATTERNS approach and means adding a new estimator only requires
     an entry in ``_registry.py``.
     """
-    steps = [
-        (name, _wrap_estimator(est))
-        for name, est in pipeline.steps
-    ]
+    steps = [(name, _wrap_estimator(est)) for name, est in pipeline.steps]
     return Pipeline(steps, memory=pipeline.memory, verbose=pipeline.verbose)

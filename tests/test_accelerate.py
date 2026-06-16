@@ -1,4 +1,5 @@
 """Tests for accelerator decorator, context manager, and dispatch edge cases."""
+
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -17,8 +18,12 @@ class TestIsSupported:
 
     def test_custom_class_looks_like_sklearn(self):
         class FakeEstimator:
-            def fit(self, X, y=None): pass
-            def predict(self, X): return X
+            def fit(self, X, y=None):
+                pass
+
+            def predict(self, X):
+                return X
+
         assert _is_supported(FakeEstimator()) is False
 
 
@@ -54,10 +59,14 @@ class TestAccelerateDecorator:
         assert hasattr(lr, "predict")
 
     def test_accelerate_pipeline(self):
-        pipe = skmetal.accelerate(Pipeline([
-            ("scaler", StandardScaler()),
-            ("clf", LogisticRegression()),
-        ]))
+        pipe = skmetal.accelerate(
+            Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("clf", LogisticRegression()),
+                ]
+            )
+        )
         assert isinstance(pipe, Pipeline)
         assert hasattr(pipe.steps[0][1], "_estimator")
         assert hasattr(pipe.steps[1][1], "_estimator")
@@ -67,18 +76,26 @@ class TestAccelerateDecorator:
         assert not hasattr(rf, "_estimator")
 
     def test_accelerate_pipeline_with_unsupported(self):
-        pipe = skmetal.accelerate(Pipeline([
-            ("scaler", StandardScaler()),
-            ("rf", RandomForestClassifier()),
-        ]))
+        pipe = skmetal.accelerate(
+            Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("rf", RandomForestClassifier()),
+                ]
+            )
+        )
         assert hasattr(pipe.steps[0][1], "_estimator")  # StandardScaler wrapped
         assert not hasattr(pipe.steps[1][1], "_estimator")  # RF untouched
 
     def test_accelerate_pipeline_all_unsupported(self):
-        pipe = skmetal.accelerate(Pipeline([
-            ("rf1", RandomForestClassifier()),
-            ("rf2", RandomForestClassifier()),
-        ]))
+        pipe = skmetal.accelerate(
+            Pipeline(
+                [
+                    ("rf1", RandomForestClassifier()),
+                    ("rf2", RandomForestClassifier()),
+                ]
+            )
+        )
         # Neither step should be wrapped
         assert not hasattr(pipe.steps[0][1], "_estimator")
         assert not hasattr(pipe.steps[1][1], "_estimator")
@@ -88,16 +105,20 @@ class TestAccelerateContextManager:
     def test_context_manager_disables_gpu(self):
         with skmetal.accelerate_context(enabled=False):
             from skmetal._config import get_config
+
             assert get_config().device == "cpu"
         from skmetal._config import get_config
+
         assert get_config().device == "gpu"
 
     def test_context_manager_enables_gpu(self):
         skmetal.set_device("cpu")
         with skmetal.accelerate_context(enabled=True):
             from skmetal._config import get_config
+
             assert get_config().device == "gpu"
         from skmetal._config import get_config
+
         assert get_config().device == "cpu"
 
     def test_context_manager_exception_restores(self):
@@ -127,6 +148,7 @@ class TestAccelerateFunctionCall:
 class TestAccelerateTypeCheck:
     def test_accelerate_wrong_type_warns(self):
         import warnings
+
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = skmetal.accelerate("not an estimator")

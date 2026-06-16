@@ -38,6 +38,7 @@ def _mps_gemm(A, B):
 
 # ── f32↔f16 converter tests ─────────────────────────────────────────────────
 
+
 class TestConverters:
     def test_f32_to_f16_roundtrip(self):
         x = _make_mat(128, 64)
@@ -55,8 +56,10 @@ class TestConverters:
         assert x_back.shape == x.shape
         assert x_back.dtype == np.float16
         np.testing.assert_allclose(
-            x_back.astype(np.float32), x.astype(np.float32),
-            rtol=1e-3, atol=1e-4,
+            x_back.astype(np.float32),
+            x.astype(np.float32),
+            rtol=1e-3,
+            atol=1e-4,
         )
 
     def test_converter_identity_small(self):
@@ -79,9 +82,7 @@ class TestConverters:
         x_back = _bridge.convert_f16_to_f32(x_f16)
         assert np.all(np.isfinite(x_back))
         # Values beyond f16 max become inf
-        assert np.isinf(_bridge.convert_f16_to_f32(
-            _bridge.convert_f32_to_f16(np.array([1e5], dtype=np.float32))
-        ))
+        assert np.isinf(_bridge.convert_f16_to_f32(_bridge.convert_f32_to_f16(np.array([1e5], dtype=np.float32))))
 
     def test_converter_invalid_dtype(self):
         with pytest.raises(TypeError, match="must be float32"):
@@ -103,6 +104,7 @@ class TestConverters:
 
 
 # ── f16 GEMM tests ───────────────────────────────────────────────────────────
+
 
 class TestGemmf16:
     @pytest.mark.parametrize("size", _F16_ALIGNED_SIZES)
@@ -156,8 +158,7 @@ class TestGemmf16:
 
     def test_gemm_f16_rejects_non_aligned_m(self):
         with pytest.raises(RuntimeError, match="gemm_f16 failed"):
-            _bridge.gemm_f16(_make_mat(10, 64, dtype=np.float16),
-                             _make_mat(64, 64, dtype=np.float16))
+            _bridge.gemm_f16(_make_mat(10, 64, dtype=np.float16), _make_mat(64, 64, dtype=np.float16))
 
     def test_gemm_f16_rejects_wrong_dtype(self):
         A = _make_mat(64, 64, dtype=np.float32)
@@ -173,6 +174,7 @@ class TestGemmf16:
 
 
 # ── f32 simdgroup GEMM auto-routing tests ────────────────────────────────────
+
 
 class TestSimdgroupGemm:
     """Tests for the f32 simdgroup fast path inside skmetal_gemm."""
@@ -237,6 +239,7 @@ class TestSimdgroupGemm:
 
 # ── Combined f16 pipeline test (converter + gemm) ────────────────────────────
 
+
 class TestF16Pipeline:
     """End-to-end: f32 → convert → f16 GEMM → convert → f32 matches f32 MPS."""
 
@@ -263,9 +266,7 @@ class TestF16Pipeline:
 
         A_f16 = _bridge.convert_f32_to_f16(A)
         B_f16 = _bridge.convert_f32_to_f16(B)
-        C_final = _bridge.convert_f16_to_f32(
-            _bridge.gemm_f16(A_f16, B_f16)
-        )
+        C_final = _bridge.convert_f16_to_f32(_bridge.gemm_f16(A_f16, B_f16))
         rtol = {64: 0.02, 128: 0.05}.get(max(M, N, K), 0.05)
         atol = {128: 0.02}.get(max(M, N, K), 0.01)
         np.testing.assert_allclose(C_final, C_ref, rtol=rtol, atol=atol)
@@ -284,6 +285,7 @@ class TestF16Pipeline:
 
 
 # ── Benchmark-style throughput comparisons ───────────────────────────────────
+
 
 class TestF16Throughput:
     """Measure f16 vs f32 throughput for various sizes.

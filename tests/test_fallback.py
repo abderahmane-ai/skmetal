@@ -4,6 +4,7 @@ These cover the Python-layer behaviour: METAL_AVAILABLE flag, the accelerate
 decorator when Metal is absent, the context manager, dispatch for unsupported
 estimators, and the unified registry structure.
 """
+
 import threading
 
 import skmetal
@@ -20,6 +21,7 @@ from sklearn.tree import DecisionTreeClassifier  # not in GPU_REGISTRY
 # ---------------------------------------------------------------------------
 # 1. Basic invariants
 # ---------------------------------------------------------------------------
+
 
 def test_metal_available_is_bool():
     assert isinstance(METAL_AVAILABLE, bool)
@@ -61,6 +63,7 @@ def test_registry_module_paths_are_skmetal():
 # 3. Dispatch: unsupported estimator is returned unchanged
 # ---------------------------------------------------------------------------
 
+
 def test_wrap_unsupported_estimator_returns_original():
     dt = DecisionTreeClassifier()
     result = _wrap_estimator(dt)
@@ -79,41 +82,45 @@ def test_is_supported_false_for_decision_tree():
 # 4. Pipeline dispatch is type-safe (not name-based)
 # ---------------------------------------------------------------------------
 
+
 def test_wrap_pipeline_unsupported_steps_pass_through():
     """Steps without a GPU impl are returned unchanged inside a pipeline."""
-    pipe = Pipeline([
-        ("step_named_linearregression", DecisionTreeClassifier()),  # name looks like LR but type is DT
-    ])
+    pipe = Pipeline(
+        [
+            ("step_named_linearregression", DecisionTreeClassifier()),  # name looks like LR but type is DT
+        ]
+    )
     wrapped = _wrap_pipeline(pipe)
     _, est = wrapped.steps[0]
     assert type(est) is DecisionTreeClassifier, (
-        "Dispatch should be type-based, not name-based. "
-        "A DecisionTreeClassifier should never be wrapped."
+        "Dispatch should be type-based, not name-based. A DecisionTreeClassifier should never be wrapped."
     )
 
 
 def test_wrap_pipeline_supported_step_by_type():
     """A StandardScaler in a strangely-named step still gets wrapped by type."""
-    pipe = Pipeline([
-        ("my_confusingly_named_linear_regression_step", StandardScaler()),
-    ])
+    pipe = Pipeline(
+        [
+            ("my_confusingly_named_linear_regression_step", StandardScaler()),
+        ]
+    )
     wrapped = _wrap_pipeline(pipe)
     _, est = wrapped.steps[0]
     # On Apple Silicon the type will be MetalStandardScaler;
     # on other platforms the fallback scaler is returned (still a StandardScaler
     # underneath). Either way it must NOT be a MetalLinearRegression.
-    assert "LinearRegression" not in type(est).__name__, (
-        "Step dispatch must not be driven by step name substring."
-    )
+    assert "LinearRegression" not in type(est).__name__, "Step dispatch must not be driven by step name substring."
 
 
 # ---------------------------------------------------------------------------
 # 5. accelerate_context — thread safety
 # ---------------------------------------------------------------------------
 
+
 def test_accelerate_context_restores_device():
     """Context manager must restore the previous device on exit."""
     from skmetal._config import get_config, set_device
+
     set_device("cpu")
     with skmetal.accelerate_context(enabled=True):
         assert get_config().device == "gpu"
@@ -122,6 +129,7 @@ def test_accelerate_context_restores_device():
 
 def test_accelerate_context_is_nestable():
     from skmetal._config import get_config, set_device
+
     set_device("cpu")
     with skmetal.accelerate_context(enabled=True):
         assert get_config().device == "gpu"
@@ -134,17 +142,20 @@ def test_accelerate_context_is_nestable():
 def test_accelerate_context_thread_isolation():
     """Two threads with different contexts must not corrupt each other."""
     from skmetal._config import _get_device
+
     results = {}
 
     def thread_gpu():
         with skmetal.accelerate_context(enabled=True):
             import time
+
             time.sleep(0.05)  # overlap with thread_cpu
             results["gpu"] = _get_device()
 
     def thread_cpu():
         with skmetal.accelerate_context(enabled=False):
             import time
+
             time.sleep(0.05)
             results["cpu"] = _get_device()
 
@@ -160,10 +171,10 @@ def test_accelerate_context_thread_isolation():
     assert results.get("cpu") == "cpu"
 
 
-
 # ---------------------------------------------------------------------------
 # 6. accelerate decorator on an unsupported estimator
 # ---------------------------------------------------------------------------
+
 
 def test_accelerate_unsupported_returns_original():
     """@accelerate on an unsupported estimator returns it unchanged."""
@@ -174,6 +185,7 @@ def test_accelerate_unsupported_returns_original():
 
 def test_accelerate_function_wraps_result():
     """@accelerate on a factory function returns a callable."""
+
     @skmetal.accelerate
     def make_model():
         return LinearRegression()

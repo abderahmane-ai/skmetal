@@ -1,4 +1,5 @@
 """MLX backend registry — centralized MLX availability, version, and capability detection."""
+
 from sklearn.decomposition import TruncatedSVD
 
 _HAS_MLX = False
@@ -10,6 +11,7 @@ _MLX_CAPABILITIES = {
 
 try:
     import mlx.core as mx
+
     _HAS_MLX = True
     _MLX_VERSION = getattr(mx, "__version__", "unknown")
     _MLX_CAPABILITIES["has_compile"] = hasattr(mx, "compile")

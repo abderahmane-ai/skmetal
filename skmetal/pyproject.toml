@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skmetal"
-version = "0.10.0"
+version = "0.8.0"
 description = "GPU-accelerated scikit-learn via Apple Metal"
 readme = "README.md"
 authors = [
@@ -12,12 +12,12 @@ authors = [
 ]
 requires-python = ">=3.10"
 license = "MIT"
+license-files = ["LICENSE*"]
 keywords = ["scikit-learn", "metal", "gpu", "apple-silicon", "machine-learning"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: MacOS :: MacOS X :: macOS 14",
     "Programming Language :: Python :: 3.10",

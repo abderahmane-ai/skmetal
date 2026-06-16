@@ -2,8 +2,10 @@ import numpy as np
 from ._base import BaseGPUEstimator
 from .._bridge import (
     knn_tiled_kneighbors,
-    knn_vote_classify, knn_vote_regress,
-    knn_vote_classify_weighted, knn_vote_regress_weighted,
+    knn_vote_classify,
+    knn_vote_regress,
+    knn_vote_classify_weighted,
+    knn_vote_regress_weighted,
 )
 
 
@@ -18,7 +20,7 @@ class MetalKNeighborsMixin:
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y)
         self._estimator.fit(X, y)
-        self._k_neighbors = getattr(self._estimator, 'n_neighbors', 5)
+        self._k_neighbors = getattr(self._estimator, "n_neighbors", 5)
         self._fitted = True
         return self
 
@@ -28,7 +30,10 @@ class MetalKNeighborsMixin:
 
         metric = getattr(self._estimator, "metric", "euclidean")
         values, indices = knn_tiled_kneighbors(
-            X, self._estimator._fit_X, k, self._tile_size,
+            X,
+            self._estimator._fit_X,
+            k,
+            self._tile_size,
             metric=metric,
         )
         return values, indices
@@ -77,12 +82,11 @@ class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
 
         weights = getattr(self._estimator, "weights", "uniform")
         if weights == "distance":
-            knn_vote_classify_weighted(indices, np.sqrt(distances),
-                                        train_labels, predictions,
-                                        n_test, k, len(train_labels))
+            knn_vote_classify_weighted(
+                indices, np.sqrt(distances), train_labels, predictions, n_test, k, len(train_labels)
+            )
         else:
-            knn_vote_classify(indices, train_labels, predictions,
-                              n_test, k, len(train_labels))
+            knn_vote_classify(indices, train_labels, predictions, n_test, k, len(train_labels))
 
         classes = self._estimator.classes_
         pred_classes = classes[np.round(predictions).astype(int)]
@@ -104,7 +108,7 @@ class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
         neighbor_labels = self._estimator._y.ravel()[indices]  # shape (n_test, k)
 
         # Broadcast comparison against classes (n_test, k, n_classes)
-        mask = (neighbor_labels[:, :, np.newaxis] == classes[np.newaxis, np.newaxis, :])
+        mask = neighbor_labels[:, :, np.newaxis] == classes[np.newaxis, np.newaxis, :]
 
         if weights == "distance":
             d_safe = np.sqrt(np.maximum(distances, 1e-10))
@@ -140,12 +144,11 @@ class MetalKNeighborsRegressor(MetalKNeighborsMixin, BaseGPUEstimator):
 
         weights = getattr(self._estimator, "weights", "uniform")
         if weights == "distance":
-            knn_vote_regress_weighted(indices, np.sqrt(distances),
-                                       train_targets, predictions,
-                                       n_test, k, len(train_targets))
+            knn_vote_regress_weighted(
+                indices, np.sqrt(distances), train_targets, predictions, n_test, k, len(train_targets)
+            )
         else:
-            knn_vote_regress(indices, train_targets, predictions,
-                             n_test, k, len(train_targets))
+            knn_vote_regress(indices, train_targets, predictions, n_test, k, len(train_targets))
 
         return predictions
 

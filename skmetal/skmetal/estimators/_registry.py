@@ -20,30 +20,25 @@ _HAS_MLX = has_mlx()
 # Maps sklearn class -> (python_module, gpu_class_name).
 # This is the ONLY place where this mapping lives. _dispatch.py consumes it directly.
 GPU_REGISTRY: dict[type, tuple[str, str]] = {
-    LinearRegression:                ("skmetal.estimators.linear_model", "MetalLinearRegression"),
-    Ridge:                           ("skmetal.estimators.linear_model", "MetalRidge"),
-    LogisticRegression:              ("skmetal.estimators.linear_model", "MetalLogisticRegression"),
-    Lasso:                           ("skmetal.estimators.linear_model", "MetalLasso"),
-    ElasticNet:                      ("skmetal.estimators.linear_model", "MetalElasticNet"),
-
-    TruncatedSVD:                    ("skmetal.estimators.decomposition", "MetalTruncatedSVD"),
-    KMeans:                          ("skmetal.estimators.cluster",       "MetalKMeans"),
-    DBSCAN:                          ("skmetal.estimators.cluster",       "MetalDBSCAN"),
-    GaussianNB:                      ("skmetal.estimators.naive_bayes",   "MetalGaussianNB"),
-
-    StandardScaler:                  ("skmetal.estimators.preprocessing", "MetalStandardScaler"),
-    MinMaxScaler:                    ("skmetal.estimators.preprocessing", "MetalMinMaxScaler"),
-    RobustScaler:                    ("skmetal.estimators.preprocessing", "MetalRobustScaler"),
-
-    KNeighborsClassifier:            ("skmetal.estimators.neighbors",    "MetalKNeighborsClassifier"),
-    KNeighborsRegressor:             ("skmetal.estimators.neighbors",    "MetalKNeighborsRegressor"),
-    NearestNeighbors:                ("skmetal.estimators.neighbors",    "MetalNearestNeighbors"),
-
-    HistGradientBoostingRegressor:   ("skmetal.estimators.ensemble",     "MetalHistGradientBoostingRegressor"),
-    HistGradientBoostingClassifier:  ("skmetal.estimators.ensemble",     "MetalHistGradientBoostingClassifier"),
-
-    SVC:                             ("skmetal.estimators.svm",          "MetalSVC"),
-    SVR:                             ("skmetal.estimators.svm",          "MetalSVR"),
+    LinearRegression: ("skmetal.estimators.linear_model", "MetalLinearRegression"),
+    Ridge: ("skmetal.estimators.linear_model", "MetalRidge"),
+    LogisticRegression: ("skmetal.estimators.linear_model", "MetalLogisticRegression"),
+    Lasso: ("skmetal.estimators.linear_model", "MetalLasso"),
+    ElasticNet: ("skmetal.estimators.linear_model", "MetalElasticNet"),
+    TruncatedSVD: ("skmetal.estimators.decomposition", "MetalTruncatedSVD"),
+    KMeans: ("skmetal.estimators.cluster", "MetalKMeans"),
+    DBSCAN: ("skmetal.estimators.cluster", "MetalDBSCAN"),
+    GaussianNB: ("skmetal.estimators.naive_bayes", "MetalGaussianNB"),
+    StandardScaler: ("skmetal.estimators.preprocessing", "MetalStandardScaler"),
+    MinMaxScaler: ("skmetal.estimators.preprocessing", "MetalMinMaxScaler"),
+    RobustScaler: ("skmetal.estimators.preprocessing", "MetalRobustScaler"),
+    KNeighborsClassifier: ("skmetal.estimators.neighbors", "MetalKNeighborsClassifier"),
+    KNeighborsRegressor: ("skmetal.estimators.neighbors", "MetalKNeighborsRegressor"),
+    NearestNeighbors: ("skmetal.estimators.neighbors", "MetalNearestNeighbors"),
+    HistGradientBoostingRegressor: ("skmetal.estimators.ensemble", "MetalHistGradientBoostingRegressor"),
+    HistGradientBoostingClassifier: ("skmetal.estimators.ensemble", "MetalHistGradientBoostingClassifier"),
+    SVC: ("skmetal.estimators.svm", "MetalSVC"),
+    SVR: ("skmetal.estimators.svm", "MetalSVR"),
 }
 
 # Merge MLX registry when available — only TruncatedSVD benefits from MLX.

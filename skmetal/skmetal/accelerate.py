@@ -71,6 +71,7 @@ class _Accelerator:
         if hasattr(obj, "fit"):
             return _wrap_estimator(obj)
         if callable(obj):
+
             @wraps(obj)
             def wrapper(*args, **kwargs):
                 result = obj(*args, **kwargs)
@@ -79,6 +80,7 @@ class _Accelerator:
                 if hasattr(result, "fit"):
                     return _wrap_estimator(result)
                 return result
+
             return wrapper
         warnings.warn(f"accelerate: {type(obj).__name__} is not a recognized estimator.")
         return obj

@@ -45,9 +45,7 @@ class MetalGaussianNB(BaseGPUEstimator):
         for i in range(len(self._estimator.classes_)):
             jointi = np.log(class_prior[i])
             jointi -= 0.5 * np.sum(np.log(2.0 * np.pi * (var[i] + eps)))
-            jointi -= 0.5 * np.sum(
-                (X - theta[i]) ** 2 / (var[i] + eps), axis=1
-            )
+            jointi -= 0.5 * np.sum((X - theta[i]) ** 2 / (var[i] + eps), axis=1)
             jll.append(jointi)
 
         return np.column_stack(jll)

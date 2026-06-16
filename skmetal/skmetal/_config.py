@@ -5,38 +5,41 @@ import threading
 
 PER_ESTIMATOR_THRESHOLDS: dict[str, tuple[int, int]] = {
     # --- GPU winners (benchmarked at 200K×500 / 100K×200 / 1M×100) ---
-    "StandardScaler":    (1_000,   10),    # 6.05× GPU (1M×100)
-    "LinearRegression":  (50_000,  50),    # 8.15× GPU (200K×500)
-    "TruncatedSVD":      (5_000,   20),    # 3.59× GPU (100K×500)
-    "ElasticNet":        (50_000,  50),    # 1.53× GPU (100K×200)
-    "Lasso":             (50_000,  50),    # 1.40× GPU (100K×200)
-    "LogisticRegression":(500_000, 500),   # 0.92× tied; likely wins for p>500
-
+    "StandardScaler": (1_000, 10),  # 6.05× GPU (1M×100)
+    "LinearRegression": (50_000, 50),  # 8.15× GPU (200K×500)
+    "TruncatedSVD": (5_000, 20),  # 3.59× GPU (100K×500)
+    "ElasticNet": (50_000, 50),  # 1.53× GPU (100K×200)
+    "Lasso": (50_000, 50),  # 1.40× GPU (100K×200)
+    "LogisticRegression": (500_000, 500),  # 0.92× tied; likely wins for p>500
     # --- CPU wins at benchmark sizes (keep on CPU) ---
-    "Ridge":             (10_000_000, 10_000),  # 0.91× CPU (Accelerate sub-ms, dispatch overhead)
-    "MinMaxScaler":      (500_000, 10),    # 1.11× GPU (1M×100) — marginal, high threshold
-    "KNeighborsClassifier":  (5_000_000, 10_000),  # 0.62× CPU (100K×200)
-    "KNeighborsRegressor":   (5_000_000, 10_000),  # 0.62× CPU (same kernel)
-    "KMeans":            (10_000,   10),    # 0.67× CPU on Apple GPU; 94-517× via MLX backend (M3 Ultra)
-
+    "Ridge": (10_000_000, 10_000),  # 0.91× CPU (Accelerate sub-ms, dispatch overhead)
+    "MinMaxScaler": (500_000, 10),  # 1.11× GPU (1M×100) — marginal, high threshold
+    "KNeighborsClassifier": (5_000_000, 10_000),  # 0.62× CPU (100K×200)
+    "KNeighborsRegressor": (5_000_000, 10_000),  # 0.62× CPU (same kernel)
+    "KMeans": (10_000, 10),  # 0.67× CPU on Apple GPU; 94-517× via MLX backend (M3 Ultra)
     # --- Conservative defaults (not benchmarked) ---
-    "RobustScaler":      (100_000, 10),
-    "DBSCAN":            (1_000,   2),
-    "HistGradientBoostingClassifier":   (10_000, 10),
-    "HistGradientBoostingRegressor":    (10_000, 10),
-    "GaussianNB":        (10_000,  10),
-
+    "RobustScaler": (100_000, 10),
+    "DBSCAN": (1_000, 2),
+    "HistGradientBoostingClassifier": (10_000, 10),
+    "HistGradientBoostingRegressor": (10_000, 10),
+    "GaussianNB": (10_000, 10),
     # --- SVM (uses RBF Gram on GPU; matrix-free predict) ---
-    "SVC":               (5_000,   10),
-    "SVR":               (5_000,   10),
-
+    "SVC": (5_000, 10),
+    "SVR": (5_000, 10),
     # --- NearestNeighbors (unsupervised; GPU pairwise distance) ---
-    "NearestNeighbors":  (5_000,   10),
+    "NearestNeighbors": (5_000, 10),
 }
 
 
 class Config:
-    def __init__(self, device: str = "gpu", threshold: int = 1, dtype: str = "float32", verbose: bool = False, thresholds: dict = None):
+    def __init__(
+        self,
+        device: str = "gpu",
+        threshold: int = 1,
+        dtype: str = "float32",
+        verbose: bool = False,
+        thresholds: dict = None,
+    ):
         self._device = device
         self.threshold = threshold
         self.dtype = dtype
@@ -101,7 +104,6 @@ def set_device(device: str) -> None:
         # Also update the thread-local so callers that set global device and
         # then read via get_config() still see a consistent value.
         _thread_local.device = device
-
 
 
 def set_threshold(threshold: int) -> None:

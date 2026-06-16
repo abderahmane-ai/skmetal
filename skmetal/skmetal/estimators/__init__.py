@@ -13,20 +13,35 @@ from .svm import MetalSVC, MetalSVR  # noqa: F401
 
 try:
     from ._mlx_svd import MetalTruncatedSVDMLX  # noqa: F401
+
     _HAS_MLX_SVD = True
 except ImportError:
     _HAS_MLX_SVD = False
     MetalTruncatedSVDMLX = None  # type: ignore
 
 __all__ = [
-    "BaseGPUEstimator", "GPU_REGISTRY", "GPU_ESTIMATORS",
-    "MetalLinearRegression", "MetalRidge", "MetalLogisticRegression",
-    "MetalLasso", "MetalElasticNet", "MetalKMeans", "MetalDBSCAN",
-    "MetalGaussianNB", "MetalStandardScaler", "MetalMinMaxScaler",
-    "MetalRobustScaler", "MetalKNeighborsClassifier",
-    "MetalKNeighborsRegressor", "MetalNearestNeighbors",
-    "MetalHistGradientBoostingRegressor", "MetalHistGradientBoostingClassifier",
-    "MetalSVC", "MetalSVR", "MetalTruncatedSVD",
+    "BaseGPUEstimator",
+    "GPU_REGISTRY",
+    "GPU_ESTIMATORS",
+    "MetalLinearRegression",
+    "MetalRidge",
+    "MetalLogisticRegression",
+    "MetalLasso",
+    "MetalElasticNet",
+    "MetalKMeans",
+    "MetalDBSCAN",
+    "MetalGaussianNB",
+    "MetalStandardScaler",
+    "MetalMinMaxScaler",
+    "MetalRobustScaler",
+    "MetalKNeighborsClassifier",
+    "MetalKNeighborsRegressor",
+    "MetalNearestNeighbors",
+    "MetalHistGradientBoostingRegressor",
+    "MetalHistGradientBoostingClassifier",
+    "MetalSVC",
+    "MetalSVR",
+    "MetalTruncatedSVD",
 ]
 
 if _HAS_MLX_SVD:
