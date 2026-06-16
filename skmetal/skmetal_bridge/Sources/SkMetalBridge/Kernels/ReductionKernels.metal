@@ -22,7 +22,15 @@ kernel void reduce_sum(
 ) {
     uint total_threads = lsz * num_groups;
     float local_sum = 0.0f;
-    for (uint i = tid; i < n; i += total_threads) {
+    // float4 vectorized: each thread processes 4 elements per stride
+    uint i = tid * 4;
+    uint step = total_threads * 4;
+    for (; i + 4 <= n; i += step) {
+        float4 v = *reinterpret_cast<device const float4*>(input + i);
+        local_sum += v.x + v.y + v.z + v.w;
+    }
+    // Scalar tail
+    for (i = (n / 4) * 4 + tid; i < n; i += total_threads) {
         local_sum += input[i];
     }
 
@@ -62,7 +70,15 @@ kernel void norm2(
 ) {
     uint total_threads = lsz * num_groups;
     float local_sum = 0.0f;
-    for (uint i = tid; i < n; i += total_threads) {
+    // float4 vectorized: each thread processes 4 elements per stride
+    uint i = tid * 4;
+    uint step = total_threads * 4;
+    for (; i + 4 <= n; i += step) {
+        float4 v = *reinterpret_cast<device const float4*>(input + i);
+        local_sum += v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w;
+    }
+    // Scalar tail
+    for (i = (n / 4) * 4 + tid; i < n; i += total_threads) {
         local_sum += input[i] * input[i];
     }
     float simd_result = simd_sum(local_sum);
@@ -98,7 +114,17 @@ kernel void max_abs_diff(
 ) {
     uint total_threads = lsz * num_groups;
     float local_max = 0.0f;
-    for (uint i = tid; i < n; i += total_threads) {
+    // float4 vectorized: each thread processes 4 elements per stride
+    uint i = tid * 4;
+    uint step = total_threads * 4;
+    for (; i + 4 <= n; i += step) {
+        float4 va = *reinterpret_cast<device const float4*>(a + i);
+        float4 vb = *reinterpret_cast<device const float4*>(b + i);
+        float4 diff = fabs(va - vb);
+        local_max = fmax(local_max, fmax(fmax(diff.x, diff.y), fmax(diff.z, diff.w)));
+    }
+    // Scalar tail
+    for (i = (n / 4) * 4 + tid; i < n; i += total_threads) {
         float diff = fabs(a[i] - b[i]);
         local_max = fmax(local_max, diff);
     }

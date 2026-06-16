@@ -90,7 +90,14 @@ kernel void kmeans_accumulate(
         if (assignments[i] == cluster) {
             ++count;
             uint x_base = i * d;
-            for (uint j = my_start; j < my_end; ++j) {
+            // float4 vectorized accumulation
+            uint j = my_start;
+            for (; j + 4 <= my_end; j += 4) {
+                float4 vx = *reinterpret_cast<device const float4*>(X + x_base + j);
+                device float4* dst = reinterpret_cast<device float4*>(partial_centroids + centroid_base + j);
+                *dst = *dst + vx;
+            }
+            for (; j < my_end; ++j) {
                 partial_centroids[centroid_base + j] += X[x_base + j];
             }
         }

@@ -15,7 +15,7 @@ kernel void compute_linear_irls(
     if (tid >= n) return;
     float val = linear[tid] + b;
     val = clamp(val, -100.0f, 100.0f);
-    float prob = 1.0f / (1.0f + exp(-val));
+    float prob = 1.0f / (1.0f + fast::exp(-val));
     linear[tid] = prob;
     prob = clamp(prob, 1e-7f, 1.0f - 1e-7f);
     weights[tid] = sqrt(prob * (1.0f - prob));
@@ -39,7 +39,14 @@ kernel void compute_error_scale(
     error[tid] = prob[tid] - y[tid];
     float w = weights[tid];
     uint base = tid * p;
-    for (uint j = 0; j < p; j++) {
+    // float4 vectorized: 4 elements per iteration
+    uint j = 0;
+    float4 w4 = float4{w, w, w, w};
+    for (; j + 4 <= p; j += 4) {
+        float4 x = *reinterpret_cast<device const float4*>(X + base + j);
+        *reinterpret_cast<device float4*>(X_scaled + base + j) = w4 * x;
+    }
+    for (; j < p; j++) {
         X_scaled[base + j] = X[base + j] * w;
     }
 }
@@ -74,7 +81,7 @@ kernel void sigmoid_grad_loss_binary(
     if (tid >= n) return;
     float z = lin[tid];
     z = clamp(z, -100.0f, 100.0f);
-    float p = 1.0f / (1.0f + exp(-z));
+    float p = 1.0f / (1.0f + fast::exp(-z));
     prob[tid] = p;
     residual[tid] = p - y[tid];
     float y_adj = 2.0f * y[tid] - 1.0f;

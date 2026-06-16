@@ -57,29 +57,18 @@ public func skmetal_ridge_fit_solve(
     guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
     var nU = UInt32(n), pU = UInt32(p)
 
-    guard let computeEncoder = cb.makeComputeCommandEncoder() else { return 1 }
-    if let pipeline = ctx.getPipeline(name: "column_means", functionName: "column_means") {
-        computeEncoder.setComputePipelineState(pipeline)
-        computeEncoder.setBuffer(xBuffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(meanBuffer, offset: 0, index: 1)
-        computeEncoder.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
-        computeEncoder.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
-        let blockCols = 8
-        let tgCount = (p + blockCols - 1) / blockCols
-        computeEncoder.dispatchThreadgroups(MTLSize(width: tgCount, height: 1, depth: 1),
-                                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-    }
-    computeEncoder.endEncoding()
-
+    // Fused: compute column means + subtract from X in single dispatch
     guard let centerEncoder = cb.makeComputeCommandEncoder() else { return 1 }
-    if let pipeline = ctx.getPipeline(name: "center_columns", functionName: "center_columns") {
+    if let pipeline = ctx.getPipeline(name: "column_means_and_center", functionName: "column_means_and_center") {
         centerEncoder.setComputePipelineState(pipeline)
         centerEncoder.setBuffer(xBuffer, offset: 0, index: 0)
         centerEncoder.setBuffer(meanBuffer, offset: 0, index: 1)
         centerEncoder.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 2)
         centerEncoder.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 3)
-        centerEncoder.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
-                                       threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        let blockCols = 16
+        let tgCount = (p + blockCols - 1) / blockCols
+        centerEncoder.dispatchThreadgroups(MTLSize(width: tgCount, height: 1, depth: 1),
+                                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
     }
     centerEncoder.endEncoding()
 

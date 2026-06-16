@@ -263,16 +263,34 @@ kernel void knn_negate_distances(
     constant uint& is_cosine [[buffer(6)]],
     uint tid [[thread_position_in_grid]]
 ) {
-    if (tid >= n_q * n_t) return;
-    uint i = tid / n_t;
-    uint j = tid % n_t;
-    float d = dot[tid];
+    // float4 vectorized: each thread processes 4 elements
+    uint base = tid * 4;
+    if (base + 4 <= n_q * n_t) {
+        float4 d4 = *reinterpret_cast<device const float4*>(dot + base);
+        uint4 cols = uint4{base, base+1, base+2, base+3} % uint(n_t);
+        uint4 rows = uint4{base, base+1, base+2, base+3} / uint(n_t);
+        if (is_cosine != 0) {
+            float4 rq4 = {r_query[rows.x], r_query[rows.y], r_query[rows.z], r_query[rows.w]};
+            float4 rt4 = {r_train[cols.x], r_train[cols.y], r_train[cols.z], r_train[cols.w]};
+            float4 result = d4 * rsqrt(rq4 + 1e-10f) * rsqrt(rt4 + 1e-10f);
+            *reinterpret_cast<device float4*>(out + base) = result;
+        } else {
+            float4 rq4 = {r_query[rows.x], r_query[rows.y], r_query[rows.z], r_query[rows.w]};
+            float4 rt4 = {r_train[cols.x], r_train[cols.y], r_train[cols.z], r_train[cols.w]};
+            float4 result = 2.0f * d4 - rq4 - rt4;
+            *reinterpret_cast<device float4*>(out + base) = result;
+        }
+        return;
+    }
+    // Scalar tail for last < 4 elements
+    if (base >= n_q * n_t) return;
+    uint row = base / n_t;
+    uint col = base % n_t;
+    float d = dot[base];
     if (is_cosine != 0) {
-        float rq = r_query[i] + 1e-10f;
-        float rt = r_train[j] + 1e-10f;
-        out[tid] = d * rsqrt(rq) * rsqrt(rt);
+        out[base] = d * rsqrt(r_query[row] + 1e-10f) * rsqrt(r_train[col] + 1e-10f);
     } else {
-        out[tid] = 2.0f * d - r_query[i] - r_train[j];
+        out[base] = 2.0f * d - r_query[row] - r_train[col];
     }
 }
 
