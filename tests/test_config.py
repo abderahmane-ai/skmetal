@@ -48,7 +48,7 @@ class TestConfig:
             set_dtype("float64")
 
     def test_set_dtype_unknown_rejected(self):
-        with pytest.raises(ValueError, match="dtype must be"):
+        with pytest.raises(ValueError, match="Only float32"):
             set_dtype("float16")
 
     def test_set_verbose_true(self):

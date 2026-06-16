@@ -6,12 +6,14 @@ import warnings
 import numpy as np
 from pathlib import Path
 
-_HAS_MLX = False
-try:
+from ._config import get_config
+
+from .estimators._mlx_registry import has_mlx
+
+_HAS_MLX = has_mlx()
+
+if _HAS_MLX:
     import mlx.core as mx
-    _HAS_MLX = True
-except ImportError:
-    pass
 
 # ---------------------------------------------------------------------------
 # Platform detection — skmetal only works on Apple Silicon macOS 14+.
@@ -279,7 +281,8 @@ def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
             try:
                 return _gemm_f16_mlx(A, B)
             except Exception:
-                pass
+                if get_config().verbose:
+                    warnings.warn("MLX f16 GEMM failed, falling back", stacklevel=2)
 
     # Priority 2: MLX-native float32 GEMM (skips ctypes/dylib overhead)
     if not trans_A and not trans_B and alpha == 1.0 and beta == 0.0:
@@ -287,7 +290,8 @@ def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
             try:
                 return _gemm_mlx(A, B, alpha, beta, trans_A, trans_B)
             except Exception:
-                pass
+                if get_config().verbose:
+                    warnings.warn("MLX f32 GEMM failed, falling back", stacklevel=2)
 
     # Priority 3: Metal bridge float16 simdgroup GEMM
     if not trans_A and not trans_B and alpha == 1.0 and beta == 0.0:
@@ -298,9 +302,12 @@ def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0,
                 C_f16 = gemm_f16(A_f16, B_f16)
                 return convert_f16_to_f32(C_f16)
             except (RuntimeError, TypeError):
-                pass
+                if get_config().verbose:
+                    warnings.warn("Metal f16 simdgroup GEMM failed, falling back", stacklevel=2)
 
     # Priority 4: Metal bridge float32 MPS GEMM
+    if not METAL_AVAILABLE:
+        raise RuntimeError("skmetal: Metal not available — gemm() requires Apple Silicon.")
     C = np.empty((M, N), dtype=np.float32, order="C")
     _bridge_call(_lib.skmetal_gemm, A, B, C, M, N, K,
                  ctypes.c_float(alpha), ctypes.c_float(beta),

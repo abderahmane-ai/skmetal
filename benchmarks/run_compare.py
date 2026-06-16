@@ -32,12 +32,12 @@ def benchmark(name, est_factory, data_factory, n_runs=3):
         c.fit(*args)
         cpu_t.append(time.perf_counter() - t0)
 
-        gpu_t = []
-        for _ in range(n_runs):
-            g = skmetal.accelerate(est_factory())
-            t0 = time.perf_counter()
-            g.fit(*args)
-            gpu_t.append(time.perf_counter() - t0)
+    gpu_t = []
+    for _ in range(n_runs):
+        g = skmetal.accelerate(est_factory())
+        t0 = time.perf_counter()
+        g.fit(*args)
+        gpu_t.append(time.perf_counter() - t0)
 
     cpu_m = float(np.median(cpu_t))
     gpu_m = float(np.median(gpu_t))

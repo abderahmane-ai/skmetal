@@ -5,7 +5,7 @@ from .._config import get_config, _get_device
 
 
 class BaseGPUEstimator(BaseEstimator):
-    _estimator: BaseEstimator
+    _estimator: BaseEstimator | None
 
     def __init__(self, _estimator=None):
         self._estimator = _estimator
@@ -61,6 +61,9 @@ class BaseGPUEstimator(BaseEstimator):
 
     def _fallback_predict_proba(self, X):
         return self._estimator.predict_proba(X)
+
+    def _fallback_inverse_transform(self, X):
+        return self._estimator.inverse_transform(X)
 
     def score(self, X, y, **kwargs):
         """Delegate score to the underlying estimator."""

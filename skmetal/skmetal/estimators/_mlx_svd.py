@@ -1,6 +1,5 @@
 """MLX-accelerated TruncatedSVD — GPU SVD via mlx.linalg.svd."""
 import numpy as np
-import warnings
 from scipy import linalg
 from sklearn.utils.extmath import svd_flip
 from ._base import BaseGPUEstimator
@@ -28,8 +27,6 @@ if _HAS_MLX:
 
         def __init__(self, _estimator=None):
             super().__init__(_estimator)
-            if not _HAS_MLX:
-                warnings.warn("MLX not available; falling back to Metal bridge")
 
         def fit(self, X, y=None, **kwargs):
             X, _ = self._validate_data(X, y)

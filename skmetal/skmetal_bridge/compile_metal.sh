@@ -6,7 +6,7 @@ KERNELS_DIR="$SCRIPT_DIR/Sources/SkMetalBridge/Kernels"
 OUTPUT="$KERNELS_DIR/SkMetalBridge.metallib"
 
 echo "==> Generating MetalSource.swift from $KERNELS_DIR"
-python3 "$SCRIPT_DIR/generate_metal_source.py"
+python3 "$SCRIPT_DIR/generate_metal_source.py" || exit 1
 
 echo "==> Compiling Metal kernels from $KERNELS_DIR"
 

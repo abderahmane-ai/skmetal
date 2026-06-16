@@ -2,7 +2,7 @@ import sys
 import importlib
 from pathlib import Path
 
-__version__ = "0.3.0"
+from .skmetal._about import __version__, __version_info__
 
 # Make the inner skmetal/skmetal/ directory discoverable as a submodule source
 # so that ``from skmetal.accelerate import accelerate`` resolves correctly.
@@ -32,6 +32,8 @@ def __getattr__(name):
 
 
 __all__ = [
+    "__version__",
+    "__version_info__",
     "accelerate",
     "accelerate_context",
     "get_config",

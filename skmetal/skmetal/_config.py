@@ -3,7 +3,7 @@
 import threading
 
 
-PER_ESTIMATOR_THRESHOLDS = {
+PER_ESTIMATOR_THRESHOLDS: dict[str, tuple[int, int]] = {
     # --- GPU winners (benchmarked at 200K×500 / 100K×200 / 1M×100) ---
     "StandardScaler":    (1_000,   10),    # 6.05× GPU (1M×100)
     "LinearRegression":  (50_000,  50),    # 8.15× GPU (200K×500)
@@ -111,10 +111,8 @@ def set_threshold(threshold: int) -> None:
 
 def set_dtype(dtype: str) -> None:
     with _lock:
-        if dtype == "float64":
-            raise ValueError("Only float32 is supported for GPU operations.")
         if dtype != "float32":
-            raise ValueError("dtype must be 'float32'")
+            raise ValueError("Only float32 is supported for GPU operations.")
         _config.dtype = dtype
 
 

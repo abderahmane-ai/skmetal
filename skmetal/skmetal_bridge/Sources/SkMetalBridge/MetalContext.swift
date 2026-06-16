@@ -3,14 +3,8 @@ import Metal
 import MetalPerformanceShaders
 
 final class MetalContext: @unchecked Sendable {
-    nonisolated(unsafe) private static var _shared: MetalContext?
-
-    nonisolated static var shared: MetalContext {
-        if let instance = _shared { return instance }
-        let instance = MetalContext()
-        _shared = instance
-        return instance
-    }
+    /// Thread-safe lazy singleton (Swift `static let` guarantees single init).
+    static let shared = MetalContext()
 
     let device: MTLDevice
     let library: MTLLibrary

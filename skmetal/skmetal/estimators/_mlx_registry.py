@@ -40,4 +40,6 @@ _MLX_CLASS_NAMES: dict[type, str] = {
 
 __all__ = [
     "has_mlx",
+    "mlx_version",
+    "mlx_capabilities",
 ]

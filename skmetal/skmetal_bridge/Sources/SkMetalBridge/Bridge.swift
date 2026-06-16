@@ -52,7 +52,7 @@ public func skmetal_warmup() -> Int32 {
         ("scaler_fit", "scaler_fit"),
         ("column_minmax", "column_minmax"),
         ("scale_f32", "scale_f32"),
-        ("sigmoid", "sigmoid"),
+        ("cross_entropy_loss", "cross_entropy_loss"),
         ("subtract", "subtract"),
         ("axpy", "axpy"),
         ("add_scalar", "add_scalar"),
