@@ -69,28 +69,45 @@ BENCHMARKS = [
 ]
 
 
+REGRESSION_THRESHOLD = 0.5  # fail if speedup drops below 50% of baseline
+
+
 if __name__ == "__main__":
     results = []
+    baseline_path = Path(__file__).parent / "baseline.json"
+    baseline = {}
+    if baseline_path.exists():
+        with open(baseline_path) as f:
+            for b in json.load(f):
+                baseline[b["estimator"]] = b.get("speedup", 0)
+
     print(f"{'Estimator':<20} {'Samples':>8} {'Feats':>6} {'CPU(s)':>8} {'GPU(s)':>8} {'Speedup':>8}  {'vs Base':>8}")
     print("-" * 70)
 
+    regressions = []
     for name, est, df in BENCHMARKS:
         r = benchmark(name, est, df)
         results.append(r)
         s = f"{r['speedup']:.2f}x" if r['speedup'] >= 0.1 else f"{r['speedup']:.3f}x"
 
-        baseline_path = Path(__file__).parent / "baseline.json"
         vs = ""
-        if baseline_path.exists():
-            with open(baseline_path) as f:
-                for b in json.load(f):
-                    if b["estimator"] == r["estimator"]:
-                        old = b.get("speedup", 0)
-                        if old > 0:
-                            c = (r["speedup"] / old - 1) * 100
-                            vs = f"{c:+3.0f}%"
-                        break
+        old = baseline.get(r["estimator"], 0)
+        if old > 0:
+            c = (r["speedup"] / old - 1) * 100
+            vs = f"{c:+3.0f}%"
+            if r["speedup"] < old * REGRESSION_THRESHOLD:
+                regressions.append(
+                    f"{r['estimator']}: {r['speedup']:.2f}x vs baseline {old:.2f}x "
+                    f"(< {REGRESSION_THRESHOLD*100:.0f}% threshold)"
+                )
 
         print(f"{r['estimator']:<20} {r['n_samples']:>8} {r['n_features']:>6} "
               f"{r['cpu_time']:>8.3f} {r['gpu_time']:>8.3f} {s:>8}  {vs:>8}")
     print("-" * 70)
+
+    if regressions:
+        print(f"\nREGRESSION DETECTED ({len(regressions)} estimator(s)):")
+        for r in regressions:
+            print(f"  {r}")
+        sys.exit(1)
+    print("No regressions detected.")

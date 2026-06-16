@@ -26,8 +26,8 @@ public func skmetal_knn_vote_classify(
         return 1
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return 1 }
 
     encoder.setComputePipelineState(pipeline)
     encoder.setBuffer(idxBuffer, offset: 0, index: 0)
@@ -69,8 +69,8 @@ public func skmetal_knn_vote_regress(
         return 1
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return 1 }
 
     encoder.setComputePipelineState(pipeline)
     encoder.setBuffer(idxBuffer, offset: 0, index: 0)
@@ -116,8 +116,8 @@ public func skmetal_knn_vote_classify_weighted(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(idxBuffer, offset: 0, index: 0)
     enc.setBuffer(distBuffer, offset: 0, index: 1)
@@ -162,8 +162,8 @@ public func skmetal_knn_vote_regress_weighted(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(idxBuffer, offset: 0, index: 0)
     enc.setBuffer(distBuffer, offset: 0, index: 1)
@@ -220,11 +220,11 @@ public func skmetal_knn_tiled_kneighbors(
     let rqBuffer = (!isManhattan) ? ctx.device.makeBuffer(length: rqSize, options: .storageModeShared) : nil
     let rtBuffer = (!isManhattan) ? ctx.device.makeBuffer(length: rtSize, options: .storageModeShared) : nil
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
     if !isManhattan, let normPpl = ctx.getPipeline(name: "row_norm_sq", functionName: "row_norm_sq"),
        let rq = rqBuffer, let rt = rtBuffer {
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(normPpl)
         enc.setBuffer(xQueryBuffer, offset: 0, index: 0)
         enc.setBuffer(rq, offset: 0, index: 1)
@@ -236,7 +236,7 @@ public func skmetal_knn_tiled_kneighbors(
                                  threadsPerThreadgroup: tgNormQ)
         enc.endEncoding()
 
-        let enc2 = cb.makeComputeCommandEncoder()!
+        guard let enc2 = cb.makeComputeCommandEncoder() else { return 1 }
         enc2.setComputePipelineState(normPpl)
         enc2.setBuffer(xTrainBuffer, offset: 0, index: 0)
         enc2.setBuffer(rt, offset: 0, index: 1)
@@ -308,7 +308,7 @@ public func skmetal_knn_tiled_kneighbors(
         let tileN = tileEnd - tileStart
 
         if isManhattan {
-            let encSel = cb.makeComputeCommandEncoder()!
+            guard let encSel = cb.makeComputeCommandEncoder() else { return 1 }
             encSel.setComputePipelineState(selectPipeline)
             encSel.setBuffer(xQueryBuffer, offset: 0, index: 0)
             encSel.setBuffer(xTrainBuffer, offset: tileStart * d * fs, index: 1)
@@ -356,7 +356,7 @@ public func skmetal_knn_tiled_kneighbors(
                         resultMatrix: matrixDot)
 
             // 2. Negate distances into separate buffer (largest value = closest)
-            let encNeg = cb.makeComputeCommandEncoder()!
+            guard let encNeg = cb.makeComputeCommandEncoder() else { return 1 }
             encNeg.setComputePipelineState(negPipeline)
             encNeg.setBuffer(db, offset: 0, index: 0)
             encNeg.setBuffer(rq, offset: 0, index: 1)
@@ -418,7 +418,7 @@ public func skmetal_knn_tiled_kneighbors(
                         resultMatrix: matrixDot)
 
             // 2. Fused distance + insertion sort top-k (existing custom kernel)
-            let encSel = cb.makeComputeCommandEncoder()!
+            guard let encSel = cb.makeComputeCommandEncoder() else { return 1 }
             encSel.setComputePipelineState(selectPipeline)
             encSel.setBuffer(db, offset: 0, index: 0)
             encSel.setBuffer(rq, offset: 0, index: 1)
@@ -435,7 +435,7 @@ public func skmetal_knn_tiled_kneighbors(
 
         if !useMPSFindTopK {
             // GPU merge of tile results into global
-            let encMerge = cb.makeComputeCommandEncoder()!
+            guard let encMerge = cb.makeComputeCommandEncoder() else { return 1 }
             encMerge.setComputePipelineState(mergePipeline)
             encMerge.setBuffer(tValsBuffer, offset: 0, index: 0)
             encMerge.setBuffer(tIdxsBuffer, offset: 0, index: 1)

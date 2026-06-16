@@ -24,8 +24,8 @@ public func skmetal_scaler_fit(
         return 1
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return 1 }
 
     encoder.setComputePipelineState(pipeline)
     encoder.setBuffer(xBuffer, offset: 0, index: 0)
@@ -70,8 +70,8 @@ public func skmetal_column_minmax(
         return 1
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return 1 }
 
     encoder.setComputePipelineState(pipeline)
     encoder.setBuffer(xBuffer, offset: 0, index: 0)
@@ -118,8 +118,8 @@ public func skmetal_column_transform(
         return 1
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return 1 }
 
     encoder.setComputePipelineState(pipeline)
     encoder.setBuffer(inBuffer, offset: 0, index: 0)

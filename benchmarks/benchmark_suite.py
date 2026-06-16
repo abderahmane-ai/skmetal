@@ -84,6 +84,8 @@ if __name__ == "__main__":
               f"{r['cpu_time']:>8.3f} {r['gpu_time']:>8.3f} {s:>8}")
 
     baseline = Path(__file__).parent / "baseline.json"
-    with open(baseline, "w") as f:
+    tmp = baseline.with_suffix(".tmp")
+    with open(tmp, "w") as f:
         json.dump(results, f, indent=2)
+    tmp.replace(baseline)  # atomic rename — avoids truncated file on crash
     print(f"\nBaseline saved to {baseline}")

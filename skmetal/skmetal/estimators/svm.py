@@ -22,6 +22,40 @@ class _BaseMetalSVM(BaseGPUEstimator):
         self._saved_gamma = None
         self._n_features = 0
 
+    def _fit_rbf(self, X, y, **kwargs):
+        """Shared RBF kernel fit for SVC and SVR."""
+        n, d = X.shape
+        gamma = _resolve_gamma(self._estimator.gamma, d, X.var())
+
+        K = np.empty((n, n), dtype=np.float32, order="C")
+        rbf_kernel_square(X, K, gamma)
+
+        self._X_train = X.copy()
+        self._saved_kernel = self._estimator.kernel
+        self._saved_gamma = self._estimator.gamma
+        self._n_features = d
+        self._estimator.kernel = "precomputed"
+        self._estimator.gamma = gamma
+
+        self._estimator.fit(K, y, **kwargs)
+        self._fitted = True
+        return self
+
+    def _binary_predict_gpu(self, X, output):
+        """Matrix-free binary predict via GPU — avoids materializing full Gram matrix."""
+        d = X.shape[1]
+        gamma = _resolve_gamma(self._saved_gamma, d, X.var())
+        sv_idx = self._estimator.support_
+        X_sv = self._X_train[sv_idx]
+        dual_coef = self._estimator.dual_coef_.ravel().astype(np.float32)
+        intercept = np.asarray(self._estimator.intercept_, dtype=np.float32)
+        svc_predict_binary(X, X_sv, dual_coef, intercept, output, gamma)
+
+    def _is_binary_rbf(self):
+        return (self._saved_kernel == "rbf"
+                and self._estimator is not None
+                and len(self._estimator.classes_) == 2)
+
     def _compute_test_kernel(self, X):
         n_test, d = X.shape
         gamma = self._saved_gamma
@@ -46,43 +80,18 @@ class MetalSVC(_BaseMetalSVM):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y, **kwargs)
-
-        n, d = X.shape
         if self._estimator.kernel != "rbf":
             return self._fallback_fit(X, y, **kwargs)
-
-        gamma = _resolve_gamma(self._estimator.gamma, d, X.var())
-
-        K = np.empty((n, n), dtype=np.float32, order="C")
-        rbf_kernel_square(X, K, gamma)
-
-        self._X_train = X.copy()
-        self._saved_kernel = self._estimator.kernel
-        self._saved_gamma = self._estimator.gamma
-        self._n_features = d
-        self._estimator.kernel = "precomputed"
-        self._estimator.gamma = gamma
-
-        self._estimator.fit(K, y, **kwargs)
-        self._fitted = True
-        return self
+        return self._fit_rbf(X, y, **kwargs)
 
     def predict(self, X):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted or self._X_train is None:
             return self._fallback_predict(X)
 
-        n_classes = len(self._estimator.classes_)
-        if n_classes == 2 and self._saved_kernel == "rbf":
-            # Matrix-free binary predict: avoid materializing full Gram matrix
-            d = X.shape[1]
-            gamma = _resolve_gamma(self._saved_gamma, d, X.var())
-            sv_idx = self._estimator.support_
-            X_sv = self._X_train[sv_idx]
-            dual_coef = self._estimator.dual_coef_.ravel().astype(np.float32)
-            intercept = np.asarray(self._estimator.intercept_, dtype=np.float32)
+        if self._is_binary_rbf():
             decisions = np.empty(X.shape[0], dtype=np.float32)
-            svc_predict_binary(X, X_sv, dual_coef, intercept, decisions, gamma)
+            self._binary_predict_gpu(X, decisions)
             return self._estimator.classes_[(decisions > 0).astype(int)]
         else:
             K_test = self._compute_test_kernel(X)
@@ -100,16 +109,9 @@ class MetalSVC(_BaseMetalSVM):
         if not self._fitted or self._X_train is None:
             return self._estimator.decision_function(X)
 
-        n_classes = len(self._estimator.classes_)
-        if n_classes == 2 and self._saved_kernel == "rbf":
-            d = X.shape[1]
-            gamma = _resolve_gamma(self._saved_gamma, d, X.var())
-            sv_idx = self._estimator.support_
-            X_sv = self._X_train[sv_idx]
-            dual_coef = self._estimator.dual_coef_.ravel().astype(np.float32)
-            intercept = np.asarray(self._estimator.intercept_, dtype=np.float32)
+        if self._is_binary_rbf():
             decisions = np.empty(X.shape[0], dtype=np.float32)
-            svc_predict_binary(X, X_sv, dual_coef, intercept, decisions, gamma)
+            self._binary_predict_gpu(X, decisions)
             return decisions
         else:
             K_test = self._compute_test_kernel(X)
@@ -121,26 +123,9 @@ class MetalSVR(_BaseMetalSVM):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y, **kwargs)
-
-        n, d = X.shape
         if self._estimator.kernel != "rbf":
             return self._fallback_fit(X, y, **kwargs)
-
-        gamma = _resolve_gamma(self._estimator.gamma, d, X.var())
-
-        K = np.empty((n, n), dtype=np.float32, order="C")
-        rbf_kernel_square(X, K, gamma)
-
-        self._X_train = X.copy()
-        self._saved_kernel = self._estimator.kernel
-        self._saved_gamma = self._estimator.gamma
-        self._n_features = d
-        self._estimator.kernel = "precomputed"
-        self._estimator.gamma = gamma
-
-        self._estimator.fit(K, y, **kwargs)
-        self._fitted = True
-        return self
+        return self._fit_rbf(X, y, **kwargs)
 
     def predict(self, X):
         X = self._validate_data(X)[0]
@@ -148,14 +133,8 @@ class MetalSVR(_BaseMetalSVM):
             return self._fallback_predict(X)
 
         if self._saved_kernel == "rbf":
-            d = X.shape[1]
-            gamma = _resolve_gamma(self._saved_gamma, d, X.var())
-            sv_idx = self._estimator.support_
-            X_sv = self._X_train[sv_idx]
-            dual_coef = self._estimator.dual_coef_.ravel().astype(np.float32)
-            intercept = np.asarray(self._estimator.intercept_, dtype=np.float32)
             pred = np.empty(X.shape[0], dtype=np.float32)
-            svc_predict_binary(X, X_sv, dual_coef, intercept, pred, gamma)
+            self._binary_predict_gpu(X, pred)
             return pred
         else:
             K_test = self._compute_test_kernel(X)

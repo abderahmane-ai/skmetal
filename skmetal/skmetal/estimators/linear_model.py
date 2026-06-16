@@ -3,149 +3,104 @@ from ._base import BaseGPUEstimator
 from .._bridge import ridge_fit_solve, logreg_irls_fit, logreg_lbfgs_fit, multinomial_lbfgs_fit, fista_fit, gemm
 
 
-class MetalLinearRegression(BaseGPUEstimator):
+class _BaseMetalLinear(BaseGPUEstimator):
+    """Shared predict() for all linear model estimators."""
+
+    def predict(self, X):
+        X = self._validate_data(X)[0]
+        if not self._should_use_gpu(X) or not self._fitted:
+            return self._fallback_predict(X)
+        w = self._estimator.coef_.reshape(-1, 1)
+        return gemm(X, w).ravel() + self._estimator.intercept_
+
+    @staticmethod
+    def _compute_intercept(y_mean, X_mean, coef, fit_intercept):
+        return float(y_mean) - X_mean @ coef if fit_intercept else 0.0
+
+    @staticmethod
+    def _center_if_needed(X, y, fit_intercept):
+        """Return (X_centered, y_centered, X_mean, y_mean)."""
+        if fit_intercept:
+            X_mean = X.mean(axis=0, dtype=np.float32)
+            y_mean = float(y.mean())
+            return X - X_mean, y - y_mean, X_mean, y_mean
+        return X, y, None, None
+
+
+class MetalLinearRegression(_BaseMetalLinear):
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y, **kwargs)
 
-        n, p = X.shape
-        fit_intercept = self._estimator.fit_intercept
+        p = X.shape[1]
         X = X.copy()
-
         X_mean = np.empty(p, dtype=np.float32)
         coef = np.empty(p, dtype=np.float32)
 
         ridge_fit_solve(X, y, X_mean, coef, alpha=0.0)
 
         self._estimator.coef_ = coef
-        if fit_intercept:
-            self._estimator.intercept_ = float(y.mean()) - X_mean @ coef
-        else:
-            self._estimator.intercept_ = 0.0
+        self._estimator.intercept_ = self._compute_intercept(
+            y.mean(), X_mean, coef, self._estimator.fit_intercept)
         self._fitted = True
         return self
 
-    def predict(self, X):
-        X = self._validate_data(X)[0]
-        if not self._should_use_gpu(X) or not self._fitted:
-            return self._fallback_predict(X)
-        w = self._estimator.coef_.reshape(-1, 1)
-        return gemm(X, w).ravel() + self._estimator.intercept_
 
-
-class MetalRidge(BaseGPUEstimator):
+class MetalRidge(_BaseMetalLinear):
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y, **kwargs)
 
+        p = X.shape[1]
         X = X.copy()
-
-        n, p = X.shape
-        alpha = self._estimator.alpha
-        fit_intercept = self._estimator.fit_intercept
-
         X_mean = np.empty(p, dtype=np.float32)
         coef = np.empty(p, dtype=np.float32)
 
-        ridge_fit_solve(X, y, X_mean, coef, alpha)
+        ridge_fit_solve(X, y, X_mean, coef, self._estimator.alpha)
 
         self._estimator.coef_ = coef
-        if fit_intercept:
-            self._estimator.intercept_ = float(y.mean()) - X_mean @ coef
-        else:
-            self._estimator.intercept_ = 0.0
+        self._estimator.intercept_ = self._compute_intercept(
+            y.mean(), X_mean, coef, self._estimator.fit_intercept)
         self._fitted = True
         return self
 
-    def predict(self, X):
-        X = self._validate_data(X)[0]
-        if not self._should_use_gpu(X) or not self._fitted:
-            return self._fallback_predict(X)
-        w = self._estimator.coef_.reshape(-1, 1)
-        return gemm(X, w).ravel() + self._estimator.intercept_
 
+class _BaseMetalFista(_BaseMetalLinear):
+    """Shared FISTA fit for Lasso (l1_ratio=1.0) and ElasticNet."""
 
-class MetalLasso(BaseGPUEstimator):
-    def fit(self, X, y, **kwargs):
-        X, y = self._validate_data(X, y)
-        if not self._should_use_gpu(X):
-            return self._fallback_fit(X, y, **kwargs)
-
-        n, p = X.shape
+    def _fit_fista(self, X, y, l1_ratio):
         alpha = self._estimator.alpha
         tol = self._estimator.tol
         max_iter = self._estimator.max_iter
         fit_intercept = self._estimator.fit_intercept
 
-        if fit_intercept:
-            X_mean = X.mean(axis=0, dtype=np.float32)
-            y_mean = float(y.mean())
-            Xc = X - X_mean
-            yc = y - y_mean
-        else:
-            Xc = X
-            yc = y
-
-        coef, n_iter = fista_fit(Xc, yc, alpha, l1_ratio=1.0, tol=tol, max_iter=max_iter)
-
-        self._estimator.coef_ = coef
-        if fit_intercept:
-            self._estimator.intercept_ = y_mean - X_mean @ coef
-        else:
-            self._estimator.intercept_ = 0.0
-        self._estimator.n_iter_ = n_iter
-        self._fitted = True
-        return self
-
-    def predict(self, X):
-        X = self._validate_data(X)[0]
-        if not self._should_use_gpu(X) or not self._fitted:
-            return self._fallback_predict(X)
-        w = self._estimator.coef_.reshape(-1, 1)
-        return gemm(X, w).ravel() + self._estimator.intercept_
-
-
-class MetalElasticNet(BaseGPUEstimator):
-    def fit(self, X, y, **kwargs):
-        X, y = self._validate_data(X, y)
-        if not self._should_use_gpu(X):
-            return self._fallback_fit(X, y, **kwargs)
-
-        n, p = X.shape
-        alpha = self._estimator.alpha
-        l1_ratio = self._estimator.l1_ratio
-        tol = self._estimator.tol
-        max_iter = self._estimator.max_iter
-        fit_intercept = self._estimator.fit_intercept
-
-        if fit_intercept:
-            X_mean = X.mean(axis=0, dtype=np.float32)
-            y_mean = float(y.mean())
-            Xc = X - X_mean
-            yc = y - y_mean
-        else:
-            Xc = X
-            yc = y
+        Xc, yc, X_mean, y_mean = self._center_if_needed(X, y, fit_intercept)
 
         coef, n_iter = fista_fit(Xc, yc, alpha, l1_ratio=l1_ratio, tol=tol, max_iter=max_iter)
 
         self._estimator.coef_ = coef
-        if fit_intercept:
-            self._estimator.intercept_ = y_mean - X_mean @ coef
-        else:
-            self._estimator.intercept_ = 0.0
+        self._estimator.intercept_ = self._compute_intercept(y_mean, X_mean, coef, fit_intercept)
         self._estimator.n_iter_ = n_iter
         self._fitted = True
         return self
 
-    def predict(self, X):
-        X = self._validate_data(X)[0]
-        if not self._should_use_gpu(X) or not self._fitted:
-            return self._fallback_predict(X)
-        w = self._estimator.coef_.reshape(-1, 1)
-        return gemm(X, w).ravel() + self._estimator.intercept_
+
+class MetalLasso(_BaseMetalFista):
+    def fit(self, X, y, **kwargs):
+        X, y = self._validate_data(X, y)
+        if not self._should_use_gpu(X):
+            return self._fallback_fit(X, y, **kwargs)
+        return self._fit_fista(X, y, l1_ratio=1.0)
+
+
+class MetalElasticNet(_BaseMetalFista):
+    def fit(self, X, y, **kwargs):
+        X, y = self._validate_data(X, y)
+        if not self._should_use_gpu(X):
+            return self._fallback_fit(X, y, **kwargs)
+        return self._fit_fista(X, y, l1_ratio=self._estimator.l1_ratio)
 
 
 class MetalLogisticRegression(BaseGPUEstimator):
@@ -248,5 +203,3 @@ class MetalLogisticRegression(BaseGPUEstimator):
             return np.column_stack([1 - prob, prob])
         exp_scores = np.exp(scores - scores.max(axis=1, keepdims=True))
         return exp_scores / exp_scores.sum(axis=1, keepdims=True)
-
-

@@ -1,3 +1,9 @@
+# Repository-root pyproject.toml — tool configuration only.
+# The full [project] metadata lives in skmetal/pyproject.toml (the installable
+# package root).  This file holds ruff and pytest settings that apply from the
+# repository root (e.g. when running ``ruff check skmetal/ tests/`` from the
+# top-level directory).
+
 [tool.ruff]
 target-version = "py310"
 line-length = 120

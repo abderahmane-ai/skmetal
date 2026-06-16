@@ -106,7 +106,7 @@ public func skmetal_logreg_irls_fit(
     var globalIt = 0
     while globalIt < maxIter {
         let batchEnd = min(globalIt + cbBatch, maxIter)
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
         for it in globalIt..<batchEnd {
             // X @ w → linear
@@ -114,7 +114,7 @@ public func skmetal_logreg_irls_fit(
 
             // Sigmoid → weight
             if let pipeline = ctx.getPipeline(name: "compute_linear_irls", functionName: "compute_linear_irls") {
-                let enc = cb.makeComputeCommandEncoder()!
+                guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
                 enc.setComputePipelineState(pipeline)
                 enc.setBuffer(linearBuffer, offset: 0, index: 0)
                 enc.setBuffer(weightBuffer, offset: 0, index: 1)
@@ -129,7 +129,7 @@ public func skmetal_logreg_irls_fit(
 
             // X_scaled = X * sqrt(weight[i]), error = sigmoid - y
             if let pipeline = ctx.getPipeline(name: "compute_error_scale", functionName: "compute_error_scale") {
-                let enc = cb.makeComputeCommandEncoder()!
+                guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
                 enc.setComputePipelineState(pipeline)
                 enc.setBuffer(linearBuffer, offset: 0, index: 0)
                 enc.setBuffer(yBuffer, offset: 0, index: 1)
@@ -154,7 +154,7 @@ public func skmetal_logreg_irls_fit(
             // L2: Hessian += α·I, gradient += α·w
             if alpha != 0 {
                 if let pipeline = ctx.getPipeline(name: "l2_reg_irls", functionName: "l2_reg_irls") {
-                    let enc = cb.makeComputeCommandEncoder()!
+                    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
                     enc.setComputePipelineState(pipeline)
                     enc.setBuffer(hBuffer, offset: 0, index: 0)
                     enc.setBuffer(gBuffer, offset: 0, index: 1)
@@ -188,7 +188,7 @@ public func skmetal_logreg_irls_fit(
             statusBlit.endEncoding()
 
             // ||d||² → convBuf
-            let encStepNorm = cb.makeComputeCommandEncoder()!
+            guard let encStepNorm = cb.makeComputeCommandEncoder() else { return 1 }
             encStepNorm.setComputePipelineState(norm2Ppl)
             encStepNorm.setBuffer(dBuffer, offset: 0, index: 0)
             encStepNorm.setBuffer(convBuf, offset: 0, index: 1)
@@ -202,7 +202,7 @@ public func skmetal_logreg_irls_fit(
             encStepNorm.endEncoding()
 
             // ||w||² → convBuf
-            let encWNorm = cb.makeComputeCommandEncoder()!
+            guard let encWNorm = cb.makeComputeCommandEncoder() else { return 1 }
             encWNorm.setComputePipelineState(norm2Ppl)
             encWNorm.setBuffer(wBuffer, offset: 0, index: 0)
             encWNorm.setBuffer(convBuf, offset: 0, index: 1)
@@ -214,7 +214,7 @@ public func skmetal_logreg_irls_fit(
             encWNorm.endEncoding()
 
             // w -= d (GPU axpy)
-            let encAxpy = cb.makeComputeCommandEncoder()!
+            guard let encAxpy = cb.makeComputeCommandEncoder() else { return 1 }
             encAxpy.setComputePipelineState(axpyPpl)
             encAxpy.setBuffer(wBuffer, offset: 0, index: 0)
             encAxpy.setBuffer(dBuffer, offset: 0, index: 1)
@@ -344,9 +344,9 @@ public func skmetal_logreg_lbfgs_fit(
         // lin = X @ w is already computed
         // reduce sum of loss_i buffer
         let ng = max(1, (n + 255) / 256)
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(rsPpl)
             enc.setBuffer(lossBuf, offset: 0, index: 0)
             enc.setBuffer(sumBuf, offset: 0, index: 1)
@@ -376,7 +376,7 @@ public func skmetal_logreg_lbfgs_fit(
     // Helper: gradient = Xᵀ(σ(Xw) - y)/n + α·w  (overwrites wPtr with gradient)
     // Also returns loss (via computeLoss which reads lossBuf)
     func computeGradientLoss() -> Float {
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
         // 1. lin = X @ w (MPS GEMM)
         let gemmLin = MPSMatrixMultiplication(
@@ -388,7 +388,7 @@ public func skmetal_logreg_lbfgs_fit(
         // 2. Sigmoid + residual + log loss (fused kernel)
         if let pipeline = ctx.getPipeline(name: "sigmoid_grad_loss_binary",
                                           functionName: "sigmoid_grad_loss_binary") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(pipeline)
             enc.setBuffer(linBuffer, offset: 0, index: 0)
             enc.setBuffer(yBuffer, offset: 0, index: 1)
@@ -416,7 +416,7 @@ public func skmetal_logreg_lbfgs_fit(
         // 4. L2: grad[i] += alpha * w[i]
         if alpha != 0 {
             if let pipeline = ctx.getPipeline(name: "axpy", functionName: "axpy") {
-                let enc = cb.makeComputeCommandEncoder()!
+                guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
                 enc.setComputePipelineState(pipeline)
                 enc.setBuffer(gBuffer, offset: 0, index: 0)  // output: g += a*x
                 enc.setBuffer(wBuffer, offset: 0, index: 1)  // x = original w
@@ -433,7 +433,7 @@ public func skmetal_logreg_lbfgs_fit(
         // 5. Reduce sum of loss elements
         let ng = max(1, (n + 255) / 256)
         if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(rsPpl)
             enc.setBuffer(lossBuf, offset: 0, index: 0)
             enc.setBuffer(sumBuf, offset: 0, index: 1)
@@ -561,7 +561,7 @@ public func skmetal_logreg_lbfgs_fit(
             step *= 0.5
         }
 
-        let lsCB = ctx.commandQueue.makeCommandBuffer()!
+        guard let lsCB = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         for t in 0..<nTrials {
             let copyBlit = lsCB.makeBlitCommandEncoder()!
             copyBlit.copy(from: trialWbuf, sourceOffset: t * pSize,
@@ -571,7 +571,7 @@ public func skmetal_logreg_lbfgs_fit(
 
             gemmLinLS.encode(commandBuffer: lsCB, leftMatrix: matrixX, rightMatrix: matrixW, resultMatrix: matrixLin)
 
-            let encLoss = lsCB.makeComputeCommandEncoder()!
+            guard let encLoss = lsCB.makeComputeCommandEncoder() else { return 1 }
             encLoss.setComputePipelineState(logLossPpl)
             encLoss.setBuffer(linBuffer, offset: 0, index: 0)
             encLoss.setBuffer(yBuffer, offset: 0, index: 1)
@@ -582,7 +582,7 @@ public func skmetal_logreg_lbfgs_fit(
                                     threadsPerThreadgroup: lsTg256)
             encLoss.endEncoding()
 
-            let encRed = lsCB.makeComputeCommandEncoder()!
+            guard let encRed = lsCB.makeComputeCommandEncoder() else { return 1 }
             encRed.setComputePipelineState(rsPpl)
             encRed.setBuffer(lossBuf, offset: 0, index: 0)
             encRed.setBuffer(lsConvBuf, offset: t * lsNg * fs, index: 1)
@@ -738,9 +738,9 @@ public func skmetal_multinomial_lbfgs_fit(
 
     func computeLoss() -> Float {
         let ng = max(1, (n + 255) / 256)
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(rsPpl)
             enc.setBuffer(lossBuf, offset: 0, index: 0)
             enc.setBuffer(sumBuf, offset: 0, index: 1)
@@ -765,7 +765,7 @@ public func skmetal_multinomial_lbfgs_fit(
     }
 
     func computeGradientLoss() -> Float {
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
         // 1. scores = X @ W (MPS GEMM)
         let gemmScores = MPSMatrixMultiplication(
@@ -781,7 +781,7 @@ public func skmetal_multinomial_lbfgs_fit(
 
         // 3. residual = prob - y_enc
         if let pipeline = ctx.getPipeline(name: "softmax_residual", functionName: "softmax_residual") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(pipeline)
             enc.setBuffer(probBuffer, offset: 0, index: 0)
             enc.setBuffer(yBuffer, offset: 0, index: 1)
@@ -805,7 +805,7 @@ public func skmetal_multinomial_lbfgs_fit(
         // 5. L2: grad[c][i] += alpha * W[i][c]
         if alpha != 0 {
             if let pipeline = ctx.getPipeline(name: "multinomial_grad_l2", functionName: "multinomial_grad_l2") {
-                let enc = cb.makeComputeCommandEncoder()!
+                guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
                 enc.setComputePipelineState(pipeline)
                 enc.setBuffer(gBuffer, offset: 0, index: 0)
                 enc.setBuffer(wBuffer, offset: 0, index: 1)
@@ -823,7 +823,7 @@ public func skmetal_multinomial_lbfgs_fit(
 
         // 6. Cross-entropy loss
         if let pipeline = ctx.getPipeline(name: "cross_entropy_loss", functionName: "cross_entropy_loss") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(pipeline)
             enc.setBuffer(probBuffer, offset: 0, index: 0)
             enc.setBuffer(yBuffer, offset: 0, index: 1)
@@ -839,7 +839,7 @@ public func skmetal_multinomial_lbfgs_fit(
         // 7. Reduce sum of loss
         let ng = max(1, (n + 255) / 256)
         if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(rsPpl)
             enc.setBuffer(lossBuf, offset: 0, index: 0)
             enc.setBuffer(sumBuf, offset: 0, index: 1)
@@ -867,7 +867,7 @@ public func skmetal_multinomial_lbfgs_fit(
 
     func computeLossAt(w: [Float]) -> Float {
         for i in 0..<totalParams { wPtr[i] = w[i] }
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
         let gemmScores = MPSMatrixMultiplication(
             device: ctx.device, transposeLeft: false, transposeRight: false,
@@ -880,7 +880,7 @@ public func skmetal_multinomial_lbfgs_fit(
         softmax.encode(commandBuffer: cb, inputMatrix: matrixScores, resultMatrix: matrixProb)
 
         if let pipeline = ctx.getPipeline(name: "cross_entropy_loss", functionName: "cross_entropy_loss") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(pipeline)
             enc.setBuffer(probBuffer, offset: 0, index: 0)
             enc.setBuffer(yBuffer, offset: 0, index: 1)
@@ -895,7 +895,7 @@ public func skmetal_multinomial_lbfgs_fit(
 
         let ng = max(1, (n + 255) / 256)
         if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
-            let enc = cb.makeComputeCommandEncoder()!
+            guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
             enc.setComputePipelineState(rsPpl)
             enc.setBuffer(lossBuf, offset: 0, index: 0)
             enc.setBuffer(sumBuf, offset: 0, index: 1)
@@ -998,7 +998,7 @@ public func skmetal_multinomial_lbfgs_fit(
             wNorms2[t] = wn2
         }
 
-        let trialCB = ctx.commandQueue.makeCommandBuffer()!
+        guard let trialCB = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         for t in 0..<maxTrialSteps {
             let blit = trialCB.makeBlitCommandEncoder()!
             blit.copy(from: trialWBuffer!, sourceOffset: t * totalParams * fs,
@@ -1016,7 +1016,7 @@ public func skmetal_multinomial_lbfgs_fit(
             softmax.encode(commandBuffer: trialCB, inputMatrix: matrixScores, resultMatrix: matrixProb)
 
             if let pipeline = ctx.getPipeline(name: "cross_entropy_loss", functionName: "cross_entropy_loss") {
-                let enc = trialCB.makeComputeCommandEncoder()!
+                guard let enc = trialCB.makeComputeCommandEncoder() else { return 1 }
                 enc.setComputePipelineState(pipeline)
                 enc.setBuffer(probBuffer, offset: 0, index: 0)
                 enc.setBuffer(yBuffer, offset: 0, index: 1)
@@ -1030,7 +1030,7 @@ public func skmetal_multinomial_lbfgs_fit(
             }
 
             if let rsPpl = ctx.getPipeline(name: "reduce_sum", functionName: "reduce_sum") {
-                let enc = trialCB.makeComputeCommandEncoder()!
+                guard let enc = trialCB.makeComputeCommandEncoder() else { return 1 }
                 enc.setComputePipelineState(rsPpl)
                 enc.setBuffer(lossBuf, offset: 0, index: 0)
                 enc.setBuffer(trialSumBuf, offset: t * trialNg * fs, index: 1)

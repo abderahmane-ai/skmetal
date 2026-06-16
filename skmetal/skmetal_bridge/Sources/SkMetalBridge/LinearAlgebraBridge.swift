@@ -21,8 +21,8 @@ public func skmetal_convert_f32_to_f16(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(inBuf, offset: 0, index: 0)
     enc.setBuffer(outBuf, offset: 0, index: 1)
@@ -53,8 +53,8 @@ public func skmetal_convert_f16_to_f32(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(inBuf, offset: 0, index: 0)
     enc.setBuffer(outBuf, offset: 0, index: 1)
@@ -101,8 +101,8 @@ public func skmetal_gemm_f16(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(bufA, offset: 0, index: 0)
     enc.setBuffer(bufB, offset: 0, index: 1)
@@ -142,7 +142,7 @@ private func trySimdgroupGemm(
         return false
     }
 
-    let enc = commandBuffer.makeComputeCommandEncoder()!
+    guard let enc = commandBuffer.makeComputeCommandEncoder() else { return false }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(bufferA, offset: 0, index: 0)
     enc.setBuffer(bufferB, offset: 0, index: 1)
@@ -174,7 +174,7 @@ public func skmetal_gemm(
     transB: Int32
 ) -> Int32 {
     let ctx = MetalContext.shared
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
     let transA_ = transA != 0
     let transB_ = transB != 0

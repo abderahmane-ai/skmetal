@@ -7,7 +7,7 @@ jobs:
     runs-on: macos-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
     - uses: actions/checkout@v4
@@ -24,6 +24,14 @@ jobs:
 
     - name: Check Swift availability
       run: swift --version
+
+    - name: Cache Swift build artifacts
+      uses: actions/cache@v4
+      with:
+        path: skmetal/skmetal_bridge/.build
+        key: swift-build-${{ runner.os }}-${{ hashFiles('skmetal/skmetal_bridge/Sources/**/*.swift', 'skmetal/skmetal_bridge/Sources/**/*.metal') }}
+        restore-keys: |
+          swift-build-${{ runner.os }}-
 
     - name: Compile Metal kernels
       run: |
@@ -54,15 +62,13 @@ jobs:
     - name: Lint with ruff
       run: |
         pip install ruff
-        # skmetal/ is the Python package root; tests/ is at repo root
         ruff check skmetal/skmetal/ tests/
+        ruff format --check skmetal/skmetal/ tests/
 
     - name: Run all tests
       run: |
-        # Run from repo root so pytest finds tests/ and the installed package
         pytest tests/ -v --timeout=120
 
-    - name: Run benchmarks (no regression check)
+    - name: Run benchmarks (fail on regression)
       run: |
-        python benchmarks/run_compare.py || true
-
+        python benchmarks/run_compare.py

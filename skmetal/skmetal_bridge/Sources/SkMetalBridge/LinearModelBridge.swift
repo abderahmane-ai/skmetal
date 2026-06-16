@@ -54,10 +54,10 @@ public func skmetal_ridge_fit_solve(
     let matrixXTy = MPSMatrix(buffer: xtyBuffer, descriptor: descVec)
     let matrixCoef = MPSMatrix(buffer: coefBuffer, descriptor: descVec)
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
     var nU = UInt32(n), pU = UInt32(p)
 
-    let computeEncoder = cb.makeComputeCommandEncoder()!
+    guard let computeEncoder = cb.makeComputeCommandEncoder() else { return 1 }
     if let pipeline = ctx.getPipeline(name: "column_means", functionName: "column_means") {
         computeEncoder.setComputePipelineState(pipeline)
         computeEncoder.setBuffer(xBuffer, offset: 0, index: 0)
@@ -71,7 +71,7 @@ public func skmetal_ridge_fit_solve(
     }
     computeEncoder.endEncoding()
 
-    let centerEncoder = cb.makeComputeCommandEncoder()!
+    guard let centerEncoder = cb.makeComputeCommandEncoder() else { return 1 }
     if let pipeline = ctx.getPipeline(name: "center_columns", functionName: "center_columns") {
         centerEncoder.setComputePipelineState(pipeline)
         centerEncoder.setBuffer(xBuffer, offset: 0, index: 0)
@@ -95,7 +95,7 @@ public func skmetal_ridge_fit_solve(
         alpha: 1.0, beta: 0.0)
     gemmXTy.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixY, resultMatrix: matrixXTy)
 
-    let encDiag = cb.makeComputeCommandEncoder()!
+    guard let encDiag = cb.makeComputeCommandEncoder() else { return 1 }
     encDiag.setComputePipelineState(addDiagPpl)
     encDiag.setBuffer(xtxBuffer, offset: 0, index: 0)
     var a = alpha
@@ -154,7 +154,7 @@ public func skmetal_linear_solve(
     let matrixXTy = MPSMatrix(buffer: xtyBuffer, descriptor: descVec)
     let matrixCoef = MPSMatrix(buffer: coefBuffer, descriptor: descVec)
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
     let cholesky = MPSMatrixDecompositionCholesky(device: ctx.device, lower: true, order: p)
     cholesky.encode(commandBuffer: cb, sourceMatrix: matrixXTX, resultMatrix: matrixXTX, status: statusBuffer)
@@ -244,7 +244,7 @@ public func skmetal_fista_fit(
     let mGrad = MPSMatrix(buffer: gradBuf, descriptor: colDesc)
 
     do {
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         let gemm = MPSMatrixMultiplication(
             device: ctx.device, transposeLeft: true, transposeRight: false,
             resultRows: p, resultColumns: p, interiorColumns: n,
@@ -255,7 +255,7 @@ public func skmetal_fista_fit(
     }
 
     do {
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         let gemm = MPSMatrixMultiplication(
             device: ctx.device, transposeLeft: true, transposeRight: false,
             resultRows: p, resultColumns: 1, interiorColumns: n,
@@ -311,7 +311,7 @@ public func skmetal_fista_fit(
 
     while globalIt < batchSize && !convergedInBatch {
         let batchEnd = min(globalIt + cbBatch, batchSize)
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
         for batchIt in globalIt..<batchEnd {
 
@@ -325,7 +325,7 @@ public func skmetal_fista_fit(
                 alpha: 1.0, beta: 0.0)
             gemm.encode(commandBuffer: cb, leftMatrix: mXTX, rightMatrix: mZ, resultMatrix: mGrad)
 
-            let encGradSub = cb.makeComputeCommandEncoder()!
+            guard let encGradSub = cb.makeComputeCommandEncoder() else { return 1 }
             encGradSub.setComputePipelineState(axpyPpl)
             encGradSub.setBuffer(gradBuf, offset: 0, index: 0)
             encGradSub.setBuffer(xtyBuf, offset: 0, index: 1)
@@ -340,7 +340,7 @@ public func skmetal_fista_fit(
             blit2.copy(from: zBuf, sourceOffset: 0, to: xTempBuf, destinationOffset: 0, size: pBufSize)
             blit2.endEncoding()
 
-            let encStep = cb.makeComputeCommandEncoder()!
+            guard let encStep = cb.makeComputeCommandEncoder() else { return 1 }
             encStep.setComputePipelineState(axpyPpl)
             encStep.setBuffer(xTempBuf, offset: 0, index: 0)
             encStep.setBuffer(gradBuf, offset: 0, index: 1)
@@ -351,7 +351,7 @@ public func skmetal_fista_fit(
             encStep.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
             encStep.endEncoding()
 
-            let encST = cb.makeComputeCommandEncoder()!
+            guard let encST = cb.makeComputeCommandEncoder() else { return 1 }
             encST.setComputePipelineState(stPpl)
             encST.setBuffer(xBuf_g, offset: 0, index: 0)
             encST.setBuffer(xTempBuf, offset: 0, index: 1)
@@ -363,7 +363,7 @@ public func skmetal_fista_fit(
             encST.endEncoding()
 
             if enScale != 1.0 {
-                let encScale = cb.makeComputeCommandEncoder()!
+                guard let encScale = cb.makeComputeCommandEncoder() else { return 1 }
                 encScale.setComputePipelineState(scalePpl)
                 encScale.setBuffer(xBuf_g, offset: 0, index: 0)
                 var sc = enScale
@@ -378,7 +378,7 @@ public func skmetal_fista_fit(
             t = (1.0 + sqrt(1.0 + 4.0 * tPrev * tPrev)) / 2.0
             let factor = (tPrev - 1.0) / t
 
-            let encSub = cb.makeComputeCommandEncoder()!
+            guard let encSub = cb.makeComputeCommandEncoder() else { return 1 }
             encSub.setComputePipelineState(subPpl)
             encSub.setBuffer(xBuf_g, offset: 0, index: 0)
             encSub.setBuffer(xPrevBuf, offset: 0, index: 1)
@@ -392,7 +392,7 @@ public func skmetal_fista_fit(
             blit3.copy(from: xBuf_g, sourceOffset: 0, to: zBuf, destinationOffset: 0, size: pBufSize)
             blit3.endEncoding()
 
-            let encZUp = cb.makeComputeCommandEncoder()!
+            guard let encZUp = cb.makeComputeCommandEncoder() else { return 1 }
             encZUp.setComputePipelineState(axpyPpl)
             encZUp.setBuffer(zBuf, offset: 0, index: 0)
             encZUp.setBuffer(xTempBuf, offset: 0, index: 1)
@@ -409,7 +409,7 @@ public func skmetal_fista_fit(
                           size: pBufSize)
             snapBlit.endEncoding()
 
-            let encConv = cb.makeComputeCommandEncoder()!
+            guard let encConv = cb.makeComputeCommandEncoder() else { return 1 }
             encConv.setComputePipelineState(maxDiffPpl)
             encConv.setBuffer(xBuf_g, offset: 0, index: 0)
             encConv.setBuffer(xPrevBuf, offset: 0, index: 1)

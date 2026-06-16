@@ -34,10 +34,10 @@ public func skmetal_pairwise_distance(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
     // 1) Row norms: one thread per row, simd_sum for reduction
-    let encNorm = cb.makeComputeCommandEncoder()!
+    guard let encNorm = cb.makeComputeCommandEncoder() else { return 1 }
     encNorm.setComputePipelineState(normPipeline)
     encNorm.setBuffer(inputBuffer, offset: 0, index: 0)
     encNorm.setBuffer(normBuf, offset: 0, index: 1)
@@ -63,7 +63,7 @@ public func skmetal_pairwise_distance(
     gemm.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixX, resultMatrix: matrixC)
 
     // 3) Combine: D[i][j] = norm[i] + norm[j] - 2*cross[i][j]
-    let encComb = cb.makeComputeCommandEncoder()!
+    guard let encComb = cb.makeComputeCommandEncoder() else { return 1 }
     encComb.setComputePipelineState(combinePipeline)
     encComb.setBuffer(normBuf, offset: 0, index: 0)
     encComb.setBuffer(crossBuf, offset: 0, index: 1)
@@ -110,8 +110,8 @@ public func skmetal_compute_mindists(
         return 1
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return 1 }
 
     encoder.setComputePipelineState(pipeline)
     encoder.setBuffer(xBuffer, offset: 0, index: 0)
@@ -156,8 +156,8 @@ public func skmetal_kmeans_assign(
         return 1
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
-    let encoder = commandBuffer.makeComputeCommandEncoder()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return 1 }
 
     encoder.setComputePipelineState(pipeline)
     encoder.setBuffer(xBuffer, offset: 0, index: 0)
@@ -248,9 +248,9 @@ public func skmetal_kmeans_batch_fused(
 
     for it in 0..<maxIter {
         nIter = Int32(it + 1)
-        let cb = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
-        let enc1 = cb.makeComputeCommandEncoder()!
+        guard let enc1 = cb.makeComputeCommandEncoder() else { return 1 }
         enc1.setComputePipelineState(assignPipeline)
         enc1.setBuffer(xBuffer, offset: 0, index: 0)
         enc1.setBuffer(cBuffer, offset: 0, index: 1)
@@ -261,7 +261,7 @@ public func skmetal_kmeans_batch_fused(
         enc1.dispatchThreadgroups(assignGrid, threadsPerThreadgroup: tgSize)
         enc1.endEncoding()
 
-        let enc2 = cb.makeComputeCommandEncoder()!
+        guard let enc2 = cb.makeComputeCommandEncoder() else { return 1 }
         enc2.setComputePipelineState(accumulatePipeline)
         enc2.setBuffer(xBuffer, offset: 0, index: 0)
         enc2.setBuffer(aBuffer, offset: 0, index: 1)
@@ -275,7 +275,7 @@ public func skmetal_kmeans_batch_fused(
                              threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
         enc2.endEncoding()
 
-        let enc3 = cb.makeComputeCommandEncoder()!
+        guard let enc3 = cb.makeComputeCommandEncoder() else { return 1 }
         enc3.setComputePipelineState(combineNormPipeline)
         enc3.setBuffer(pcBuffer, offset: 0, index: 0)
         enc3.setBuffer(pnBuffer, offset: 0, index: 1)
@@ -289,7 +289,7 @@ public func skmetal_kmeans_batch_fused(
 
         // Centroid shift: max row-wise euclidean distance between old and new
         let shiftNumGroups = max(1, (k + 255) / 256)
-        let enc4 = cb.makeComputeCommandEncoder()!
+        guard let enc4 = cb.makeComputeCommandEncoder() else { return 1 }
         enc4.setComputePipelineState(shiftPipeline)
         enc4.setBuffer(cBuffer, offset: 0, index: 0)
         enc4.setBuffer(oldCentroids, offset: 0, index: 1)
@@ -348,9 +348,9 @@ public func skmetal_kmeans_inertia(
         return -1.0
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
     if let pipeline = ctx.getPipeline(name: "kmeans_inertia", functionName: "kmeans_inertia") {
-        let enc = commandBuffer.makeComputeCommandEncoder()!
+        guard let enc = commandBuffer.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(xBuffer, offset: 0, index: 0)
         enc.setBuffer(cBuffer, offset: 0, index: 1)
@@ -396,9 +396,9 @@ public func skmetal_kmeans_shift(
         return -1.0
     }
 
-    let commandBuffer = ctx.commandQueue.makeCommandBuffer()!
+    guard let commandBuffer = ctx.commandQueue.makeCommandBuffer() else { return 1 }
     if let pipeline = ctx.getPipeline(name: "kmeans_shift", functionName: "kmeans_shift") {
-        let enc = commandBuffer.makeComputeCommandEncoder()!
+        guard let enc = commandBuffer.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(newBuffer, offset: 0, index: 0)
         enc.setBuffer(oldBuffer, offset: 0, index: 1)

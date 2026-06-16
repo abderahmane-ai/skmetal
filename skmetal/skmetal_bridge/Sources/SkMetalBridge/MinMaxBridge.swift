@@ -27,8 +27,8 @@ public func skmetal_minmax_transform(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
 
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(inputBuffer, offset: 0, index: 0)

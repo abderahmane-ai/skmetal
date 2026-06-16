@@ -16,8 +16,8 @@ public func skmetal_sv_init(
           let parentBuffer = wrapOutput(parent, length: byteSize, device: ctx.device) else {
         return 1
     }
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(parentBuffer, offset: 0, index: 0)
     var nU = UInt32(n)
@@ -48,8 +48,8 @@ public func skmetal_sv_hook(
           let parentBuffer = wrapOutput(parent, length: parentByteSize, device: ctx.device) else {
         return 1
     }
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(edgesBuffer, offset: 0, index: 0)
     enc.setBuffer(parentBuffer, offset: 0, index: 1)
@@ -77,8 +77,8 @@ public func skmetal_sv_shortcut(
           let parentBuffer = wrapOutput(parent, length: byteSize, device: ctx.device) else {
         return 1
     }
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(parentBuffer, offset: 0, index: 0)
     var nU = UInt32(n)
@@ -138,8 +138,8 @@ public func skmetal_tree_predict_all(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(xBuffer, offset: 0, index: 0)
     enc.setBuffer(tvBuffer, offset: 0, index: 1)

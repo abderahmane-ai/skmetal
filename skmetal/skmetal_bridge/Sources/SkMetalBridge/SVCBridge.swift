@@ -37,10 +37,10 @@ public func skmetal_rbf_kernel_square(
     let matrixX = MPSMatrix(buffer: xBuffer, descriptor: descX)
     let matrixK = MPSMatrix(buffer: kBuffer, descriptor: descK)
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
     if let pipeline = ctx.getPipeline(name: "row_norm_sq", functionName: "row_norm_sq") {
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(xBuffer, offset: 0, index: 0)
         enc.setBuffer(normBuffer, offset: 0, index: 1)
@@ -59,7 +59,7 @@ public func skmetal_rbf_kernel_square(
     gemm.encode(commandBuffer: cb, leftMatrix: matrixX, rightMatrix: matrixX, resultMatrix: matrixK)
 
     if let pipeline = ctx.getPipeline(name: "distance_correct", functionName: "distance_correct") {
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(kBuffer, offset: 0, index: 0)
         enc.setBuffer(normBuffer, offset: 0, index: 1)
@@ -74,7 +74,7 @@ public func skmetal_rbf_kernel_square(
     }
 
     if let pipeline = ctx.getPipeline(name: "rbf_apply", functionName: "rbf_apply") {
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(kBuffer, offset: 0, index: 0)
         var g = gamma
@@ -134,10 +134,10 @@ public func skmetal_rbf_kernel_cross(
     let matrixX2 = MPSMatrix(buffer: x2Buffer, descriptor: descX2)
     let matrixK = MPSMatrix(buffer: kBuffer, descriptor: descK)
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
     if let pipeline = ctx.getPipeline(name: "row_norm_sq", functionName: "row_norm_sq") {
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(x1Buffer, offset: 0, index: 0)
         enc.setBuffer(n1Buffer, offset: 0, index: 1)
@@ -150,7 +150,7 @@ public func skmetal_rbf_kernel_cross(
     }
 
     if let pipeline = ctx.getPipeline(name: "row_norm_sq", functionName: "row_norm_sq") {
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(x2Buffer, offset: 0, index: 0)
         enc.setBuffer(n2Buffer, offset: 0, index: 1)
@@ -169,7 +169,7 @@ public func skmetal_rbf_kernel_cross(
     gemm.encode(commandBuffer: cb, leftMatrix: matrixX1, rightMatrix: matrixX2, resultMatrix: matrixK)
 
     if let pipeline = ctx.getPipeline(name: "distance_correct", functionName: "distance_correct") {
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(kBuffer, offset: 0, index: 0)
         enc.setBuffer(n1Buffer, offset: 0, index: 1)
@@ -184,7 +184,7 @@ public func skmetal_rbf_kernel_cross(
     }
 
     if let pipeline = ctx.getPipeline(name: "rbf_apply", functionName: "rbf_apply") {
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.setBuffer(kBuffer, offset: 0, index: 0)
         var g = gamma
@@ -233,8 +233,8 @@ public func skmetal_svc_predict_binary(
         return 1
     }
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
-    let enc = cb.makeComputeCommandEncoder()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
+    guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(testBuffer, offset: 0, index: 0)
     enc.setBuffer(svBuffer, offset: 0, index: 1)

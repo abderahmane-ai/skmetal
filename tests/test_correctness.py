@@ -82,6 +82,8 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
      lambda: make_regression(n_samples=2000, n_features=50, noise=0.1, random_state=42), True),
     (LogisticRegression,
      lambda: make_classification(n_samples=2000, n_features=50, random_state=42), True),
+    (LogisticRegression,  # multi-class (exercises multinomial_lbfgs_fit)
+     lambda: make_classification(n_samples=2000, n_features=50, n_classes=3, n_informative=10, random_state=42), True),
     (TruncatedSVD,
      lambda: make_regression(n_samples=2000, n_features=100, random_state=42), False),
     (KMeans,
@@ -201,3 +203,52 @@ def test_device_info():
     assert "name" in info
     assert len(info["name"]) > 0
     assert info["max_threads_per_threadgroup"] > 0
+
+
+def test_weighted_knn_classify():
+    """Test KNN with weighted voting (weights='distance')."""
+    X, y = make_classification(n_samples=1000, n_features=20, n_informative=10, random_state=42)
+    X = X.astype(np.float32)
+    y = y.astype(np.float32)
+
+    cpu_model = KNeighborsClassifier(n_neighbors=5, weights="distance")
+    cpu_model.fit(X, y)
+    cpu_pred = cpu_model.predict(X)
+
+    gpu_model = skmetal.accelerate(KNeighborsClassifier(n_neighbors=5, weights="distance"))
+    gpu_model.fit(X, y)
+    gpu_pred = gpu_model.predict(X)
+
+    assert np.mean(gpu_pred == cpu_pred) >= 0.85
+
+
+def test_weighted_knn_regress():
+    """Test KNN regression with weighted voting (weights='distance')."""
+    X, y = make_regression(n_samples=1000, n_features=20, noise=0.1, random_state=42)
+    X = X.astype(np.float32)
+    y = y.astype(np.float32)
+
+    cpu_model = KNeighborsRegressor(n_neighbors=5, weights="distance")
+    cpu_model.fit(X, y)
+    cpu_pred = cpu_model.predict(X)
+
+    gpu_model = skmetal.accelerate(KNeighborsRegressor(n_neighbors=5, weights="distance"))
+    gpu_model.fit(X, y)
+    gpu_pred = gpu_model.predict(X)
+
+    assert np.corrcoef(gpu_pred, cpu_pred)[0, 1] >= 0.90
+
+
+def test_logistic_regression_fit_intercept_false():
+    """Test LogisticRegression with fit_intercept=False."""
+    X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
+    X = X.astype(np.float32)
+    y = y.astype(np.float32)
+
+    cpu_model = LogisticRegression(fit_intercept=False)
+    cpu_model.fit(X, y)
+
+    gpu_model = skmetal.accelerate(LogisticRegression(fit_intercept=False))
+    gpu_model.fit(X, y)
+
+    assert np.mean(gpu_model.predict(X) == cpu_model.predict(X)) >= 0.85

@@ -96,13 +96,13 @@ public func skmetal_warmup() -> Int32 {
         ("convert_f16_to_f32", "convert_f16_to_f32"),
     ]
 
-    let cb = ctx.commandQueue.makeCommandBuffer()!
+    guard let cb = ctx.commandQueue.makeCommandBuffer() else { return 1 }
 
     for (name, funcName) in pipelineNames {
         guard let pipeline = ctx.getPipeline(name: name, functionName: funcName) else {
             continue
         }
-        let enc = cb.makeComputeCommandEncoder()!
+        guard let enc = cb.makeComputeCommandEncoder() else { return 1 }
         enc.setComputePipelineState(pipeline)
         enc.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                  threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
@@ -126,7 +126,7 @@ public func skmetal_warmup() -> Int32 {
             device: ctx.device, transposeLeft: false, transposeRight: false,
             resultRows: 2, resultColumns: 2, interiorColumns: 2,
             alpha: 1.0, beta: 0.0)
-        let cb2 = ctx.commandQueue.makeCommandBuffer()!
+        guard let cb2 = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         gemm.encode(commandBuffer: cb2, leftMatrix: mA, rightMatrix: mB, resultMatrix: mC)
         cb2.commit()
         cb2.waitUntilCompleted()
