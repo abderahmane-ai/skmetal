@@ -374,8 +374,8 @@ public func skmetal_kmeans_inertia(
 
 // MARK: - KMeans shift (max centroid movement)
 
-@_cdecl("skmetal_kmeans_shift")
-public func skmetal_kmeans_shift(
+// Internal kernel (not exported to Python — used inside batch-fused loop)
+func skmetal_kmeans_shift(
     new_centroids: UnsafeRawPointer,
     old_centroids: UnsafeRawPointer,
     k: Int,

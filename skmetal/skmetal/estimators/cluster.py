@@ -149,6 +149,15 @@ class MetalKMeans(BaseGPUEstimator):
 
 
 class MetalDBSCAN(BaseGPUEstimator):
+    def _should_use_gpu(self, X):
+        if not super()._should_use_gpu(X):
+            return False
+        if X.shape[1] > 6:
+            if get_config().verbose:
+                print(f"[skmetal] DBSCAN: d={X.shape[1]} > 6, tree-based CPU faster than GPU O(n²)")
+            return False
+        return True
+
     def _gpu_sv_connected_components(self, core_indices, n_total, neighbor_mask):
         """GPU Shiloach-Vishkin connected components on the core-point subgraph.
 
@@ -201,11 +210,6 @@ class MetalDBSCAN(BaseGPUEstimator):
         n, d = X.shape
         eps = self._estimator.eps
         min_samples = self._estimator.min_samples
-
-        if d > 6:
-            if get_config().verbose:
-                print(f"[skmetal] DBSCAN: d={d} > 6, tree-based CPU faster than GPU O(n²)")
-            return self._fallback_fit(X, y, **kwargs)
 
         D = pairwise_distance(X)
         eps_sq = eps * eps

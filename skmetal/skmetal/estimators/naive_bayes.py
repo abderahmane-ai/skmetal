@@ -34,19 +34,15 @@ class MetalGaussianNB(BaseGPUEstimator):
         self._fitted = True
         return self
 
-    def predict(self, X):
-        X = self._validate_data(X)[0]
-        if not self._should_use_gpu(X) or not self._fitted:
-            return self._fallback_predict(X)
-
+    def _joint_log_likelihood(self, X):
+        """Compute joint log-likelihood for all classes."""
         theta = self._estimator.theta_
         var = self._estimator.var_
         class_prior = self._estimator.class_prior_
-        classes = self._estimator.classes_
         eps = self._estimator.epsilon_
 
         jll = []
-        for i in range(len(classes)):
+        for i in range(len(self._estimator.classes_)):
             jointi = np.log(class_prior[i])
             jointi -= 0.5 * np.sum(np.log(2.0 * np.pi * (var[i] + eps)))
             jointi -= 0.5 * np.sum(
@@ -54,30 +50,20 @@ class MetalGaussianNB(BaseGPUEstimator):
             )
             jll.append(jointi)
 
-        jll = np.column_stack(jll)
-        return classes[np.argmax(jll, axis=1)]
+        return np.column_stack(jll)
+
+    def predict(self, X):
+        X = self._validate_data(X)[0]
+        if not self._should_use_gpu(X) or not self._fitted:
+            return self._fallback_predict(X)
+        jll = self._joint_log_likelihood(X)
+        return self._estimator.classes_[np.argmax(jll, axis=1)]
 
     def predict_proba(self, X):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
             return self._fallback_predict_proba(X)
-
-        theta = self._estimator.theta_
-        var = self._estimator.var_
-        class_prior = self._estimator.class_prior_
-        classes = self._estimator.classes_
-        eps = self._estimator.epsilon_
-
-        jll = []
-        for i in range(len(classes)):
-            jointi = np.log(class_prior[i])
-            jointi -= 0.5 * np.sum(np.log(2.0 * np.pi * (var[i] + eps)))
-            jointi -= 0.5 * np.sum(
-                (X - theta[i]) ** 2 / (var[i] + eps), axis=1
-            )
-            jll.append(jointi)
-
-        jll = np.column_stack(jll)
+        jll = self._joint_log_likelihood(X)
         log_prob = jll - np.max(jll, axis=1, keepdims=True)
         prob = np.exp(log_prob)
         return prob / prob.sum(axis=1, keepdims=True)

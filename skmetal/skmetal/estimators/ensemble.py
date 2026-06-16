@@ -5,6 +5,21 @@ from sklearn.ensemble import HistGradientBoostingRegressor as _SKHistGradientBoo
 from sklearn.ensemble import HistGradientBoostingClassifier as _SKHistGradientBoostingClassifier
 
 
+# All constructor parameters shared between HGBT Regressor and Classifier.
+_HGBT_PARAMS = [
+    "loss", "learning_rate", "max_iter", "max_leaf_nodes", "max_depth",
+    "min_samples_leaf", "l2_regularization", "max_bins",
+    "categorical_features", "monotonic_cst", "interaction_cst",
+    "warm_start", "early_stopping", "scoring", "validation_fraction",
+    "n_iter_no_change", "tol", "verbose", "random_state",
+]
+
+
+def _clone_hist_estimator(estimator, target_cls):
+    """Copy constructor params from wrapped estimator to a fresh CPU HGBT."""
+    return target_cls(**{p: getattr(estimator, p) for p in _HGBT_PARAMS})
+
+
 class MetalHistGradientBoostingBase(BaseGPUEstimator):
     def __init__(self, _estimator=None):
         super().__init__(_estimator)
@@ -54,6 +69,17 @@ class MetalHistGradientBoostingBase(BaseGPUEstimator):
         self._tree_n_nodes = np.array(n_nodes_list, dtype=np.uint32)
         self._n_trees = len(offsets)
 
+    def _fit_hist(self, X, y, target_cls):
+        """Shared fit: build CPU estimator, extract trees for GPU predict."""
+        cpu_est = _clone_hist_estimator(self._estimator, target_cls)
+        cpu_est.fit(X, y)
+
+        self._estimator = cpu_est
+        self._baseline_val = np.array([float(cpu_est._baseline_prediction.flat[0])], dtype=np.float32)
+        self._extract_trees()
+        self._fitted = True
+        return self
+
     def predict(self, X):
         X = self._validate_data(X)[0]
         if not self._should_use_gpu(X) or not self._fitted:
@@ -77,36 +103,7 @@ class MetalHistGradientBoostingRegressor(MetalHistGradientBoostingBase):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y, **kwargs)
-
-        y_sk = y.astype(np.float64)
-        cpu_est = _SKHistGradientBoostingRegressor(
-            loss=self._estimator.loss,
-            learning_rate=self._estimator.learning_rate,
-            max_iter=self._estimator.max_iter,
-            max_leaf_nodes=self._estimator.max_leaf_nodes,
-            max_depth=self._estimator.max_depth,
-            min_samples_leaf=self._estimator.min_samples_leaf,
-            l2_regularization=self._estimator.l2_regularization,
-            max_bins=self._estimator.max_bins,
-            categorical_features=self._estimator.categorical_features,
-            monotonic_cst=self._estimator.monotonic_cst,
-            interaction_cst=self._estimator.interaction_cst,
-            warm_start=self._estimator.warm_start,
-            early_stopping=self._estimator.early_stopping,
-            scoring=self._estimator.scoring,
-            validation_fraction=self._estimator.validation_fraction,
-            n_iter_no_change=self._estimator.n_iter_no_change,
-            tol=self._estimator.tol,
-            verbose=self._estimator.verbose,
-            random_state=self._estimator.random_state,
-        )
-        cpu_est.fit(X, y_sk)
-
-        self._estimator = cpu_est
-        self._baseline_val = np.array([float(cpu_est._baseline_prediction.flat[0])], dtype=np.float32)
-        self._extract_trees()
-        self._fitted = True
-        return self
+        return self._fit_hist(X, y.astype(np.float64), _SKHistGradientBoostingRegressor)
 
 
 class MetalHistGradientBoostingClassifier(MetalHistGradientBoostingBase):
@@ -114,35 +111,7 @@ class MetalHistGradientBoostingClassifier(MetalHistGradientBoostingBase):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
             return self._fallback_fit(X, y, **kwargs)
-
-        cpu_est = _SKHistGradientBoostingClassifier(
-            loss=self._estimator.loss,
-            learning_rate=self._estimator.learning_rate,
-            max_iter=self._estimator.max_iter,
-            max_leaf_nodes=self._estimator.max_leaf_nodes,
-            max_depth=self._estimator.max_depth,
-            min_samples_leaf=self._estimator.min_samples_leaf,
-            l2_regularization=self._estimator.l2_regularization,
-            max_bins=self._estimator.max_bins,
-            categorical_features=self._estimator.categorical_features,
-            monotonic_cst=self._estimator.monotonic_cst,
-            interaction_cst=self._estimator.interaction_cst,
-            warm_start=self._estimator.warm_start,
-            early_stopping=self._estimator.early_stopping,
-            scoring=self._estimator.scoring,
-            validation_fraction=self._estimator.validation_fraction,
-            n_iter_no_change=self._estimator.n_iter_no_change,
-            tol=self._estimator.tol,
-            verbose=self._estimator.verbose,
-            random_state=self._estimator.random_state,
-        )
-        cpu_est.fit(X, y)
-
-        self._estimator = cpu_est
-        self._baseline_val = np.array([float(cpu_est._baseline_prediction.flat[0])], dtype=np.float32)
-        self._extract_trees()
-        self._fitted = True
-        return self
+        return self._fit_hist(X, y, _SKHistGradientBoostingClassifier)
 
     def predict(self, X):
         X = self._validate_data(X)[0]

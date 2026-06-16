@@ -13,6 +13,15 @@ class MetalKNeighborsMixin:
         self._k_neighbors: int = 5
         self._tile_size: int = 4096
 
+    def _fit_knn(self, X, y=None):
+        """Shared fit for KNN classifiers and regressors."""
+        if not self._should_use_gpu(X):
+            return self._fallback_fit(X, y)
+        self._estimator.fit(X, y)
+        self._k_neighbors = getattr(self._estimator, 'n_neighbors', 5)
+        self._fitted = True
+        return self
+
     def _kneighbors(self, X, k=None):
         if k is None:
             k = self._k_neighbors
@@ -46,25 +55,13 @@ class MetalKNeighborsMixin:
 class MetalNearestNeighbors(MetalKNeighborsMixin, BaseGPUEstimator):
     def fit(self, X, y=None, **kwargs):
         X, _ = self._validate_data(X, y)
-        if not self._should_use_gpu(X):
-            return self._fallback_fit(X, y, **kwargs)
-
-        self._estimator.fit(X)
-        self._k_neighbors = getattr(self._estimator, 'n_neighbors', 5)
-        self._fitted = True
-        return self
+        return self._fit_knn(X, y)
 
 
 class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
-        if not self._should_use_gpu(X):
-            return self._fallback_fit(X, y, **kwargs)
-
-        self._estimator.fit(X, y)
-        self._k_neighbors = getattr(self._estimator, 'n_neighbors', 5)
-        self._fitted = True
-        return self
+        return self._fit_knn(X, y)
 
     def predict(self, X):
         X = self._validate_data(X)[0]
@@ -127,13 +124,7 @@ class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
 class MetalKNeighborsRegressor(MetalKNeighborsMixin, BaseGPUEstimator):
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
-        if not self._should_use_gpu(X):
-            return self._fallback_fit(X, y, **kwargs)
-
-        self._estimator.fit(X, y)
-        self._k_neighbors = getattr(self._estimator, 'n_neighbors', 5)
-        self._fitted = True
-        return self
+        return self._fit_knn(X, y)
 
     def predict(self, X):
         X = self._validate_data(X)[0]

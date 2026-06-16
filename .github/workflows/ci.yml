@@ -65,9 +65,9 @@ jobs:
         ruff check skmetal/skmetal/ tests/
         ruff format --check skmetal/skmetal/ tests/
 
-    - name: Run all tests
+    - name: Run all tests with coverage
       run: |
-        pytest tests/ -v --timeout=120
+        pytest tests/ -v --timeout=120 --cov=skmetal --cov-report=term-missing
 
     - name: Run benchmarks (fail on regression)
       run: |

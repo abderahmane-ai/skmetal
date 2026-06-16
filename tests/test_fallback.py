@@ -30,10 +30,6 @@ def test_metal_available_exported():
     assert isinstance(skmetal.METAL_AVAILABLE, bool)
 
 
-# ---------------------------------------------------------------------------
-# 2. Registry consistency — one source of truth
-# ---------------------------------------------------------------------------
-
 def test_all_registered_estimators_are_supported():
     """Every estimator in the registry should be detected as supported."""
     for sklearn_cls in GPU_ESTIMATORS:

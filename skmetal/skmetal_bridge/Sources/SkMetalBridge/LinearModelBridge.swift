@@ -124,8 +124,8 @@ public func skmetal_ridge_fit_solve(
 
 // MARK: - Linear solve: unregularized Cholesky solve on GPU (LinearRegression)
 
-@_cdecl("skmetal_linear_solve")
-public func skmetal_linear_solve(
+// Internal Cholesky solver (not exported to Python — ridge_fit_solve handles both cases)
+func skmetal_linear_solve(
     XTX: UnsafeMutableRawPointer,
     XTy: UnsafeMutableRawPointer,
     coef_out: UnsafeMutableRawPointer,

@@ -415,6 +415,8 @@ def device_info() -> dict:
                                     ctypes.byref(unified), ctypes.byref(working_set))
     if err != 0:
         raise RuntimeError("skmetal: device_info() failed (Metal driver may be in an invalid state)")
+    # Note: name_ptr is allocated via strdup() in Swift — small one-time leak per call.
+    # This is acceptable since device_info() is typically called once at import time.
     return {
         "name": name_ptr.value.decode("utf-8") if name_ptr.value else "unknown",
         "max_threads_per_threadgroup": max_threads.value,

@@ -76,11 +76,16 @@ class _BaseMetalSVM(BaseGPUEstimator):
 
 
 class MetalSVC(_BaseMetalSVM):
+    def _should_use_gpu(self, X):
+        if not super()._should_use_gpu(X):
+            return False
+        if self._estimator is not None and self._estimator.kernel != "rbf":
+            return False
+        return True
+
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
-            return self._fallback_fit(X, y, **kwargs)
-        if self._estimator.kernel != "rbf":
             return self._fallback_fit(X, y, **kwargs)
         return self._fit_rbf(X, y, **kwargs)
 
@@ -119,11 +124,16 @@ class MetalSVC(_BaseMetalSVM):
 
 
 class MetalSVR(_BaseMetalSVM):
+    def _should_use_gpu(self, X):
+        if not super()._should_use_gpu(X):
+            return False
+        if self._estimator is not None and self._estimator.kernel != "rbf":
+            return False
+        return True
+
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
-            return self._fallback_fit(X, y, **kwargs)
-        if self._estimator.kernel != "rbf":
             return self._fallback_fit(X, y, **kwargs)
         return self._fit_rbf(X, y, **kwargs)
 
