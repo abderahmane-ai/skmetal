@@ -55,7 +55,6 @@ public func skmetal_warmup() -> Int32 {
         ("cross_entropy_loss", "cross_entropy_loss"),
         ("subtract", "subtract"),
         ("axpy", "axpy"),
-        ("add_scalar", "add_scalar"),
         ("column_means", "column_means"),
         ("center_columns", "center_columns"),
         ("compute_mindists", "compute_mindists"),

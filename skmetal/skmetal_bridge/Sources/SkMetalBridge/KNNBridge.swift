@@ -297,7 +297,7 @@ public func skmetal_knn_tiled_kneighbors(
     let tempValsBuffer = ctx.device.makeBuffer(length: tileValsSize, options: .storageModeShared)
     let tempIdxsBuffer = ctx.device.makeBuffer(length: tileIdxsSize, options: .storageModeShared)
 
-    let batchSize = min(32, max(1, nQ))
+    let batchSize = min(256, max(1, nQ))
     let tgBatch = MTLSize(width: batchSize, height: 1, depth: 1)
     let gridBatch = MTLSize(width: (nQ + batchSize - 1) / batchSize, height: 1, depth: 1)
 

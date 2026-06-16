@@ -183,7 +183,7 @@ class MetalDBSCAN(BaseGPUEstimator):
         edges[1::2] = dst
 
         parent = np.empty(n_total, dtype=np.int32)
-        sv_init(parent, n_total)
+        sv_init(parent)
 
         num_iters = int(np.ceil(np.log2(max(n_total, 2))))
         for _ in range(num_iters):

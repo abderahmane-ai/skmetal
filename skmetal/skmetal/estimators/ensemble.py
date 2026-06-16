@@ -17,7 +17,11 @@ _HGBT_PARAMS = [
 
 def _clone_hist_estimator(estimator, target_cls):
     """Copy constructor params from wrapped estimator to a fresh CPU HGBT."""
-    return target_cls(**{p: getattr(estimator, p) for p in _HGBT_PARAMS})
+    kwargs = {p: getattr(estimator, p) for p in _HGBT_PARAMS}
+    # class_weight is Classifier-only (not on Regressor)
+    if hasattr(estimator, "class_weight"):
+        kwargs["class_weight"] = estimator.class_weight
+    return target_cls(**kwargs)
 
 
 class MetalHistGradientBoostingBase(BaseGPUEstimator):

@@ -21,7 +21,7 @@ kernel void column_means(
     uint col_end = min(col_start + BLOCK_COLS, p);
     uint active_cols = col_end - col_start;
 
-    float local_sum[8];
+    float local_sum[BLOCK_COLS];
     for (uint b = 0; b < active_cols; b++) {
         local_sum[b] = 0.0f;
     }
