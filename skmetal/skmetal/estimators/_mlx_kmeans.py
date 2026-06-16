@@ -53,9 +53,11 @@ if _HAS_MLX and _fkmeans is not None:
 
             n, d = X.shape
             k = self._estimator.n_clusters
-            max_iter = min(self._estimator.max_iter, 100)
+            max_iter = min(self._estimator.max_iter, 30)  # flash-kmeans-mlx 0.1.1 tol early-exit is broken; 30 iters sufficient for convergence
             tol = self._estimator.tol
             n_init = self._estimator.n_init
+            if n_init == "auto" or n_init == "warn":
+                n_init = 10  # sklearn 1.4+ default
             init = self._estimator.init
             max_mem_gb = 4.0  # conservative for 16 GB M4 Air
 
