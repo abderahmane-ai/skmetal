@@ -52,22 +52,24 @@ cd ..
 
 ## Benchmarks
 
-Measured on an M4 Max with 128 GB unified memory, macOS 15.5, Python 3.12:
+Measured on an M4 Air (16 GB) and M4 Max (128 GB). All data float32, `n_init=1`, `max_iter=30` for KMeans.
 
-| Estimator | Data Size | CPU (s) | GPU (s) | Speedup |
-|-----------|-----------|---------|---------|---------|
-| `StandardScaler` | 1,000,000 × 100 | 0.292 | 0.030 | **9.6×** |
-| `LinearRegression` | 200,000 × 500 | 1.245 | 0.148 | **8.4×** |
-| `TruncatedSVD` | 100,000 × 500 | 0.274 | 0.094 | **2.9×** |
-| `MinMaxScaler` | 1,000,000 × 100 | 0.043 | 0.035 | **1.2×** |
-| `LogisticRegression` | 100,000 × 200 | 0.028 | 0.031 | 0.9× |
-| `Ridge` | 200,000 × 500 | 0.119 | 0.129 | 0.9× |
-| `KMeans` | 500,000 × 100 | 3.299 | 24.325 | 0.1× |
+| Estimator | Data Size | CPU | GPU | Speedup | Notes |
+|-----------|-----------|-----|-----|---------|-------|
+| `KMeans` (MLX) | 200,000 × 64, k=500 | 24.4s | 0.8s | **30×** | flash-kmeans-mlx `mx.compile`-d kernel |
+| `KMeans` (MLX) | 100,000 × 128, k=200 | 10.0s | 0.6s | **16×** | 3-10× typical for n_init ≥ 3 |
+| `StandardScaler` | 1,000,000 × 100 | 0.29s | 0.03s | **10×** | Fused Welford (1 dispatch) |
+| `LinearRegression` | 200,000 × 500 | 1.25s | 0.15s | **8.4×** | MPS GEMM + Cholesky solve |
+| `TruncatedSVD` | 100,000 × 500 | 0.27s | 0.09s | **2.9×** | Randomized SVD on GPU |
+| `MinMaxScaler` | 1,000,000 × 100 | 0.04s | 0.04s | **1.2×** | Threadgroup tree reduction |
+| `LogisticRegression` | 100,000 × 200 | 0.03s | 0.03s | 0.9× | Dispatch-limited at this size |
+| `Ridge` | 200,000 × 500 | 0.12s | 0.13s | 0.9× | CPU Accelerate framework wins at all sizes |
 
-**Winners:** Reduction-heavy ops (mean/variance, GEMM, SVD) see 3–10× speedup. **Break-even:** LogisticRegression and Ridge are dispatch-limited at these sizes. **CPU wins:** KMeans is slower on GPU (fused command-buffer loop) — MLX flash-kmeans integration (94–517× proven) is planned for v0.9.0.
+KMeans MLX requires `pip install skmetal[mlx]`. Without MLX, KMeans falls back to a Metal fused command-buffer (slower than CPU — 0.1×). The MLX path uses [flash-kmeans-mlx](https://github.com/hanxiao/flash-kmeans-mlx) which fuses distance + argmin + update into a single compiled GPU kernel.
 
 Run benchmarks locally:
 ```bash
+pip install skmetal[mlx]
 python benchmarks/run_compare.py     # moderate data sizes
 python benchmarks/benchmark_suite.py # large data (generates baseline.json)
 ```
@@ -79,8 +81,9 @@ python benchmarks/benchmark_suite.py # large data (generates baseline.json)
 - **Zero-copy GPU execution** — numpy arrays passed directly to Metal via `bytesNoCopy` on unified memory
 - **Drop-in acceleration** — decorate any estimator-returning function, wrap an existing instance, or use a context manager
 - **Smart dispatch** — automatically routes to CPU for small datasets where GPU overhead dominates; configurable per-estimator thresholds
-- **GPU solvers** — Cholesky, FISTA, L-BFGS, IRLS, K-Means fused iterations, KNN tile-then-merge, SIMD-group GEMM, and more
+- **GPU solvers** — Cholesky, FISTA, L-BFGS, IRLS, KNN tile-then-merge, SIMD-group GEMM, flash-kmeans-mlx compiled kernels
 - **float4 vectorization** — 6 kernel families use float4 loads/stores for 4× memory throughput
+- **Optional MLX acceleration** — install `skmetal[mlx]` for flash-kmeans-mlx GPU KMeans (3–30×) and TruncatedSVD (GPU SVD)
 - **Transparent fallback** — imports cleanly on non-Apple-Silicon machines; all operations fall back to scikit-learn CPU
 - **Verbose logging** — `skmetal.set_verbose(True)` prints why each estimator chose GPU or CPU
 
@@ -179,7 +182,7 @@ On non-Apple-Silicon machines `skmetal` imports cleanly and all estimators trans
 | `LogisticRegression` | L-BFGS on GPU (full loop in Swift, fused kernels) |
 | `Lasso` | FISTA with GPU residual updates |
 | `ElasticNet` | FISTA with GPU residual updates |
-| `KMeans` | Single fused command buffer (all iterations on GPU) |
+| `KMeans` | flash-kmeans-mlx GPU kernel (MLX) or fused command buffer (Metal) |
 | `DBSCAN` | GPU pairwise distance + per-point neighbor counting |
 | `KNeighborsClassifier` | GPU pairwise distance + fused voting (weighted/unweighted) |
 | `KNeighborsRegressor` | GPU pairwise distance + fused averaging |

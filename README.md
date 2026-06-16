@@ -57,17 +57,20 @@ pip install -e "skmetal[dev]"
 
 ---
 
-## Benchmarks (M4 Max, 128 GB, macOS 15.5)
+## Benchmarks (M4 Air, 16 GB)
 
 | Estimator | Data Size | Speedup |
 |-----------|-----------|---------|
-| `StandardScaler` | 1,000,000 × 100 | **9.6×** |
+| `KMeans` (MLX) | 200,000 × 64, k=500 | **30×** |
+| `KMeans` (MLX) | 100,000 × 128, k=200 | **16×** |
+| `StandardScaler` | 1,000,000 × 100 | **10×** |
 | `LinearRegression` | 200,000 × 500 | **8.4×** |
 | `TruncatedSVD` | 100,000 × 500 | **2.9×** |
 | `MinMaxScaler` | 1,000,000 × 100 | **1.2×** |
 | `LogisticRegression` | 100,000 × 200 | 0.9× |
 | `Ridge` | 200,000 × 500 | 0.9× |
-| `KMeans` | 500,000 × 100 | 0.1× |
+
+KMeans MLX requires `pip install skmetal[mlx]`.
 
 See [skmetal/README.md](skmetal/README.md) for the full PyPI readme with architecture, kernel listing, and development guide.
 
