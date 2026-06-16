@@ -53,7 +53,9 @@ if _HAS_MLX and _fkmeans is not None:
 
             n, d = X.shape
             k = self._estimator.n_clusters
-            max_iter = min(self._estimator.max_iter, 30)  # flash-kmeans-mlx 0.1.1 tol early-exit is broken; 30 iters sufficient for convergence
+            max_iter = min(
+                self._estimator.max_iter, 30
+            )  # flash-kmeans-mlx 0.1.1 tol early-exit is broken; 30 iters sufficient for convergence
             tol = self._estimator.tol
             n_init = self._estimator.n_init
             if n_init == "auto" or n_init == "warn":
@@ -74,8 +76,13 @@ if _HAS_MLX and _fkmeans is not None:
             if isinstance(init, np.ndarray):
                 c_init = mx.expand_dims(mx.array(init.astype(np.float32)), axis=0)
                 labels_mx, centroids_mx, n_iter = _fkmeans(
-                    x_b, n_clusters=k, max_iters=max_iter, tol=tol,
-                    init_centroids=c_init, verbose=False, max_mem_gb=max_mem_gb,
+                    x_b,
+                    n_clusters=k,
+                    max_iters=max_iter,
+                    tol=tol,
+                    init_centroids=c_init,
+                    verbose=False,
+                    max_mem_gb=max_mem_gb,
                 )
                 labels_1d = labels_mx[0]
                 centroids_b = centroids_mx[0]
@@ -95,8 +102,12 @@ if _HAS_MLX and _fkmeans is not None:
                 # and the speed benefit (10-30×) outweighs this limitation.
                 for init_run in range(n_init):
                     labels_mx, centroids_mx, n_iter = _fkmeans(
-                        x_b, n_clusters=k, max_iters=max_iter, tol=tol,
-                        verbose=False, max_mem_gb=max_mem_gb,
+                        x_b,
+                        n_clusters=k,
+                        max_iters=max_iter,
+                        tol=tol,
+                        verbose=False,
+                        max_mem_gb=max_mem_gb,
                         compiled=True,  # mx.compile for fused kernel
                     )
                     # NOTE: flash-kmeans-mlx 0.1.1 doesn't expose seed per-call.
