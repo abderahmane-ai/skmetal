@@ -229,7 +229,6 @@ class TestLargeScalers:
         get_config().threshold = 1
         cls.X = _RNG.uniform(-10, 10, size=(cls.N, cls.D)).astype(np.float32)
 
-    @pytest.mark.xfail(reason="Pre-existing StandardScaler GPU bug: mean_ has extreme values (~1.9k to ~3e7)")
     def test_standard_scaler_fit(self):
         model = accelerate(StandardScaler())
         model.fit(self.X)
@@ -238,7 +237,6 @@ class TestLargeScalers:
         assert np.all(np.isfinite(model.mean_))
         assert np.all(np.isfinite(model.scale_))
 
-    @pytest.mark.xfail(reason="Pre-existing StandardScaler GPU bug: transform output is wrong (~3e7)")
     def test_standard_scaler_transform(self):
         model = accelerate(StandardScaler())
         model.fit(self.X)
@@ -303,7 +301,6 @@ class TestTallSkinny:
         get_config().threshold = 1
         cls.X, cls.y = _make_regression(cls.N, cls.D)
 
-    @pytest.mark.xfail(reason="Pre-existing StandardScaler GPU bug produces extreme values")
     def test_standard_scaler_tall(self):
         model = accelerate(StandardScaler())
         model.fit(self.X)

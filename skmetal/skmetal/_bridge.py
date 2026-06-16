@@ -187,11 +187,17 @@ def gemm_f16(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     return C
 
 
+# Metal simdgroup GEMM constraints (Apple GPU hardware limits)
+_F16_SIMD_MAX_DIM = 256     # max dimension per simdgroup matmul
+_F16_SIMD_ALIGN = 8         # required byte/simd alignment
+_F16_SIMD_MIN_DIM = 128     # min dim to amortize f32→f16 conversion
+
+
 def _should_use_f16(A: np.ndarray, B: np.ndarray) -> bool:
     """Check if f16 GEMM would be beneficial.
 
     Conditions: dims aligned to 8, within simdgroup limits (<=256),
-    and large enough that conversion overhead is worth it (>= 64 per dim).
+    and large enough that conversion overhead is worth it (>= 128 per dim).
     """
     if not (A.dtype == np.float32 and B.dtype == np.float32):
         return False
@@ -200,10 +206,9 @@ def _should_use_f16(A: np.ndarray, B: np.ndarray) -> bool:
     if K1 != K2:
         return False
     K = K1
-    max_dim = 256
-    return (M <= max_dim and N <= max_dim and K <= max_dim
-            and M % 8 == 0 and N % 8 == 0 and K % 8 == 0
-            and M >= 128 and N >= 128 and K >= 128)
+    return (M <= _F16_SIMD_MAX_DIM and N <= _F16_SIMD_MAX_DIM and K <= _F16_SIMD_MAX_DIM
+            and M % _F16_SIMD_ALIGN == 0 and N % _F16_SIMD_ALIGN == 0 and K % _F16_SIMD_ALIGN == 0
+            and M >= _F16_SIMD_MIN_DIM and N >= _F16_SIMD_MIN_DIM and K >= _F16_SIMD_MIN_DIM)
 
 
 # ---------------------------------------------------------------------------

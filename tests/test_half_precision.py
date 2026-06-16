@@ -293,7 +293,7 @@ class TestF16Throughput:
     """
 
     @pytest.mark.parametrize("size", [32, 64, 128, 256])
-    def test_no_crash_at_size(self, size, benchmark=False):
+    def test_no_crash_at_size(self, size):
         A = _make_mat(size, size)
         B = _make_mat(size, size)
         _bridge.gemm(A, B)  # f32 path

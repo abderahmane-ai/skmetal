@@ -62,7 +62,7 @@ if _HAS_MLX:
             n, p = X.shape
             r = min(n_components + n_oversamples, p)
 
-            rng = np.random.RandomState(1999)
+            rng = np.random.RandomState(self._estimator.random_state or 1999)
             Omega = rng.randn(p, r).astype(np.float32, order="C")
 
             # Y = X @ Omega  (n, r)

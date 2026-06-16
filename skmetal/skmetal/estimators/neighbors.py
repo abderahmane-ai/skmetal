@@ -8,8 +8,10 @@ from .._bridge import (
 
 
 class MetalKNeighborsMixin:
-    _k_neighbors: int = 5
-    _tile_size: int = 4096
+    def __init__(self, _estimator=None):
+        super().__init__(_estimator)
+        self._k_neighbors: int = 5
+        self._tile_size: int = 4096
 
     def _kneighbors(self, X, k=None):
         if k is None:
