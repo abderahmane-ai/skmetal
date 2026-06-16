@@ -13,9 +13,10 @@ from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor, Nearest
 from sklearn.ensemble import HistGradientBoostingRegressor, HistGradientBoostingClassifier
 from sklearn.svm import SVC, SVR
 
-from ._mlx_registry import has_mlx
+from ._mlx_registry import has_mlx, has_flash_kmeans
 
 _HAS_MLX = has_mlx()
+_HAS_FLASH_KMEANS = has_flash_kmeans()
 
 # Maps sklearn class -> (python_module, gpu_class_name).
 # This is the ONLY place where this mapping lives. _dispatch.py consumes it directly.
@@ -41,11 +42,11 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
     SVR: ("skmetal.estimators.svm", "MetalSVR"),
 }
 
-# Merge MLX registry when available — only TruncatedSVD benefits from MLX.
-# Other iterative estimators (Lasso, EN, LogReg, KMeans) stay on Metal bridge
-# because mx.compile is unsuitable for iterative control flow.
+# Merge MLX backends when available
 if _HAS_MLX:
     GPU_REGISTRY[TruncatedSVD] = ("skmetal.estimators._mlx_svd", "MetalTruncatedSVDMLX")
+if _HAS_FLASH_KMEANS:
+    GPU_REGISTRY[KMeans] = ("skmetal.estimators._mlx_kmeans", "MetalKMeansMLX")
 
 # Derived map: sklearn class -> GPU class name. Computed from GPU_REGISTRY.
 GPU_ESTIMATORS: dict[type, str] = {cls: name for cls, (_, name) in GPU_REGISTRY.items()}

@@ -1,12 +1,15 @@
 """MLX backend registry — centralized MLX availability, version, and capability detection."""
 
+from sklearn.cluster import KMeans
 from sklearn.decomposition import TruncatedSVD
 
 _HAS_MLX = False
+_HAS_FLASH_KMEANS = False
 _MLX_VERSION = None
 _MLX_CAPABILITIES = {
     "has_svd": False,
     "has_compile": False,
+    "has_flash_kmeans": False,
 }
 
 try:
@@ -19,9 +22,22 @@ try:
 except ImportError:
     pass
 
+if _HAS_MLX:
+    try:
+        from flash_kmeans_mlx import batch_kmeans_Euclid  # noqa: F401
+
+        _HAS_FLASH_KMEANS = True
+        _MLX_CAPABILITIES["has_flash_kmeans"] = True
+    except ImportError:
+        pass
+
 
 def has_mlx() -> bool:
     return _HAS_MLX
+
+
+def has_flash_kmeans() -> bool:
+    return _HAS_FLASH_KMEANS
 
 
 def mlx_version() -> str:
@@ -35,13 +51,18 @@ def mlx_capabilities() -> dict:
 MLX_REGISTRY: dict[type, tuple[str, str]] = {
     TruncatedSVD: ("skmetal.estimators._mlx_svd", "MetalTruncatedSVDMLX"),
 }
+if _HAS_FLASH_KMEANS:
+    MLX_REGISTRY[KMeans] = ("skmetal.estimators._mlx_kmeans", "MetalKMeansMLX")
 
 _MLX_CLASS_NAMES: dict[type, str] = {
     TruncatedSVD: "MetalTruncatedSVDMLX",
 }
+if _HAS_FLASH_KMEANS:
+    _MLX_CLASS_NAMES[KMeans] = "MetalKMeansMLX"
 
 __all__ = [
     "has_mlx",
+    "has_flash_kmeans",
     "mlx_version",
     "mlx_capabilities",
 ]

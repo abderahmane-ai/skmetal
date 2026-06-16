@@ -19,6 +19,14 @@ except ImportError:
     _HAS_MLX_SVD = False
     MetalTruncatedSVDMLX = None  # type: ignore
 
+try:
+    from ._mlx_kmeans import MetalKMeansMLX  # noqa: F401
+
+    _HAS_MLX_KMEANS = True
+except ImportError:
+    _HAS_MLX_KMEANS = False
+    MetalKMeansMLX = None  # type: ignore
+
 __all__ = [
     "BaseGPUEstimator",
     "GPU_REGISTRY",
@@ -46,3 +54,5 @@ __all__ = [
 
 if _HAS_MLX_SVD:
     __all__.append("MetalTruncatedSVDMLX")
+if _HAS_MLX_KMEANS:
+    __all__.append("MetalKMeansMLX")
