@@ -12,12 +12,6 @@ from .._bridge import (
 )
 from .._config import get_config
 
-try:
-    from ._mlx_kmeans import MetalKMeansMLX  # noqa: F401
-except ImportError:
-    pass
-
-
 
 class MetalKMeans(BaseGPUEstimator):
     def fit(self, X, y=None, **kwargs):

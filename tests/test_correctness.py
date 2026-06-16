@@ -10,7 +10,7 @@ from sklearn.cluster import KMeans, DBSCAN
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.svm import SVC, SVR
-from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor, NearestNeighbors
 from sklearn.pipeline import Pipeline
 import skmetal
 from skmetal import _bridge
@@ -112,6 +112,8 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
      lambda: make_classification(n_samples=500, n_features=20, random_state=42), True),
     (SVR,
      lambda: make_regression(n_samples=500, n_features=20, noise=0.1, random_state=42), True),
+    (NearestNeighbors,
+     lambda: make_regression(n_samples=1000, n_features=20, noise=0.1, random_state=42), False),
 ])
 def test_estimator_correctness(EstimatorCls, data_fn, has_y):
     """Compare GPU-accelerated estimator against CPU baseline."""

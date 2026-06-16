@@ -250,55 +250,6 @@ kernel void knn_select_tile_topk_manhattan(
     }
 }
 
-// Cosine tile-local top-k: uses MPS dot products + precomputed row norms.
-// Uses max-heap for O(n_t log k) selection. Batch dispatch per threadgroup.
-kernel void knn_select_tile_topk_cosine(
-    device const float* raw_dot [[buffer(0)]],
-    device const float* r_query [[buffer(1)]],
-    device const float* r_train [[buffer(2)]],
-    device float* out_vals [[buffer(3)]],
-    device int* out_idxs [[buffer(4)]],
-    constant uint& n_q [[buffer(5)]],
-    constant uint& n_t [[buffer(6)]],
-    constant uint& k [[buffer(7)]],
-    uint gid [[threadgroup_position_in_grid]],
-    uint lid [[thread_position_in_threadgroup]],
-    uint lsz [[threads_per_threadgroup]],
-    uint tgpg [[threadgroups_per_grid]]
-) {
-    uint total_threads = lsz * tgpg;
-    for (uint row = gid * lsz + lid; row < n_q; row += total_threads) {
-        device float* my_vals = out_vals + row * k;
-        device int* my_idxs = out_idxs + row * k;
-
-        uint count = 0;
-        float rq_sqrt = sqrt(r_query[row] + 1e-10f);
-        device const float* D_row = raw_dot + row * n_t;
-
-        for (uint j = 0; j < n_t; j++) {
-            float rt_sqrt = sqrt(r_train[j] + 1e-10f);
-            float dist = 1.0f - D_row[j] / (rq_sqrt * rt_sqrt);
-
-            if (count < k) {
-                my_vals[count] = dist;
-                my_idxs[count] = int(j);
-                heap_bubble_up(my_vals, my_idxs, count);
-                count++;
-            } else if (dist < my_vals[0]) {
-                my_vals[0] = dist;
-                my_idxs[0] = int(j);
-                heap_heapify_down(my_vals, my_idxs, k, 0);
-            }
-        }
-
-        heap_sort_asc(my_vals, my_idxs, count);
-        for (uint i = count; i < k; i++) {
-            my_vals[i] = INFINITY;
-            my_idxs[i] = 0;
-        }
-    }
-}
-
 // Negate distances for MPSMatrixFindTopK (which finds largest values).
 // Euclidean:  out = 2*dot - rq - rt  = -dist^2  (larger = closer)
 // Cosine:     out = dot / (sqrt(rq)*sqrt(rt))  (larger = more similar)

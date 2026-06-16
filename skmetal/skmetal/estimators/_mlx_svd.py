@@ -5,7 +5,6 @@ from scipy import linalg
 from sklearn.utils.extmath import svd_flip
 from ._base import BaseGPUEstimator
 from ._mlx_registry import has_mlx
-from .._config import get_config, _get_device
 
 try:
     import mlx.core as mx
@@ -31,24 +30,6 @@ if _HAS_MLX:
             super().__init__(_estimator)
             if not _HAS_MLX:
                 warnings.warn("MLX not available; falling back to Metal bridge")
-
-        def _should_use_gpu(self, X):
-            config = get_config()
-            if _get_device() == "cpu":
-                return False
-            if hasattr(X, "nnz"):
-                return False
-            if X.dtype != np.float32:
-                return False
-            n, d = X.shape
-            if n * d < config.threshold:
-                return False
-            name = type(self._estimator).__name__
-            if name in config.thresholds:
-                min_rows, min_cols = config.thresholds[name]
-                if n < min_rows or d < min_cols:
-                    return False
-            return True
 
         def fit(self, X, y=None, **kwargs):
             X, _ = self._validate_data(X, y)
@@ -109,12 +90,11 @@ if _HAS_MLX:
             if hasattr(mx.linalg, "svd"):
                 B_mx = mx.array(B_np)
                 # SVD not supported on GPU, run on CPU
-                U_B, s_B, Vt_B = mx.linalg.svd(B_mx, compute_uv=True, stream=mx.cpu)
-                U_B = np.array(U_B)
+                _, s_B, Vt_B = mx.linalg.svd(B_mx, compute_uv=True, stream=mx.cpu)
                 s_B = np.array(s_B)
                 Vt_B = np.array(Vt_B)
             else:
-                U_B, s_B, Vt_B = linalg.svd(B_np, full_matrices=False)
+                _, s_B, Vt_B = linalg.svd(B_np, full_matrices=False)
 
             S = s_B[:n_components].astype(np.float32)
             Vt = Vt_B[:n_components].astype(np.float32)

@@ -55,3 +55,4 @@ OPTIMIZATION_AUDIT.md
 
 # Removed scaffolding
 skmetal_core/
+baseline_mlx.json

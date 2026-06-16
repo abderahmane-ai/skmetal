@@ -1,38 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Tree predict: one thread per sample, traverse tree to leaf, accumulate value
-kernel void tree_predict(
-    device const float* X [[buffer(0)]],
-    device const float* tree_values [[buffer(1)]],
-    device const int* tree_feature [[buffer(2)]],
-    device const float* tree_threshold [[buffer(3)]],
-    device const int* tree_left [[buffer(4)]],
-    device const int* tree_right [[buffer(5)]],
-    device const uint8_t* tree_is_leaf [[buffer(6)]],
-    device float* predictions [[buffer(7)]],
-    constant uint& n [[buffer(8)]],
-    constant uint& n_features [[buffer(9)]],
-    constant uint& n_nodes [[buffer(10)]],
-    uint tid [[thread_position_in_grid]]
-) {
-    if (tid >= n) return;
-    uint node = 0;
-    while (true) {
-        if (tree_is_leaf[node]) {
-            predictions[tid] += tree_values[node];
-            return;
-        }
-        int f = tree_feature[node];
-        float x = X[tid * n_features + uint(f)];
-        if (x <= tree_threshold[node]) {
-            node = uint(tree_left[node]);
-        } else {
-            node = uint(tree_right[node]);
-        }
-    }
-}
-
 // Multi-tree predict: each thread processes ALL trees for its sample.
 // tree_offsets[t] = starting node index in flattened arrays for tree t.
 // tree_nodes[t] = number of nodes in tree t.

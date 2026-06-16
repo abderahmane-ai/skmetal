@@ -25,6 +25,13 @@ PER_ESTIMATOR_THRESHOLDS = {
     "HistGradientBoostingClassifier":   (10_000, 10),
     "HistGradientBoostingRegressor":    (10_000, 10),
     "GaussianNB":        (10_000,  10),
+
+    # --- SVM (uses RBF Gram on GPU; matrix-free predict) ---
+    "SVC":               (5_000,   10),
+    "SVR":               (5_000,   10),
+
+    # --- NearestNeighbors (unsupervised; GPU pairwise distance) ---
+    "NearestNeighbors":  (5_000,   10),
 }
 
 

@@ -47,7 +47,6 @@ try:
     _lib = ctypes.CDLL(_find_library())
     METAL_AVAILABLE = True
 except Exception as _metal_err:  # noqa: BLE001
-    import warnings
     warnings.warn(
         f"skmetal: Metal GPU not available ({_metal_err}). "
         "All estimators will run on CPU via scikit-learn.",
@@ -110,7 +109,7 @@ _BRIDGE_REGISTRY = [
     ("skmetal_logreg_irls_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
     ("skmetal_logreg_lbfgs_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
     ("skmetal_ridge_fit_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_size_t, ctypes.c_size_t),
-    ("skmetal_linear_solve", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
+    ("skmetal_multinomial_lbfgs_fit", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_int32, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32)),
     ("skmetal_minmax_transform", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_float, ctypes.c_float),
     ("skmetal_convert_f32_to_f16", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
     ("skmetal_convert_f16_to_f32", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t),
@@ -363,28 +362,12 @@ def kmeans_inertia(X: np.ndarray, centroids: np.ndarray,
         X.ctypes.data, centroids.ctypes.data, assignments.ctypes.data, n, d, k)
 
 
-def kmeans_shift(new_centroids: np.ndarray, old_centroids: np.ndarray,
-                  k: int, d: int) -> float:
-    """Max centroid movement √(max_c ‖new[c] - old[c]‖²) (GPU)."""
-    _lib.skmetal_kmeans_shift.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
-                                            ctypes.c_size_t, ctypes.c_size_t]
-    _lib.skmetal_kmeans_shift.restype = ctypes.c_float
-    return _lib.skmetal_kmeans_shift(
-        new_centroids.ctypes.data, old_centroids.ctypes.data, k, d)
-
-
 def ridge_fit_solve(X: np.ndarray, y: np.ndarray,
                      X_mean: np.ndarray, coef: np.ndarray,
                      alpha: float) -> None:
     """Fused Ridge: center X + XTX + XTy + L2 + Cholesky solve (one GPU dispatch)."""
     _bridge_call(_lib.skmetal_ridge_fit_solve, X, y, X_mean, coef, alpha,
                  X.shape[0], X.shape[1])
-
-
-def linear_solve(XTX: np.ndarray, XTy: np.ndarray,
-                  coef: np.ndarray) -> None:
-    """Unregularized Cholesky solve on GPU: XTX⁻¹ XTy = coef."""
-    _bridge_call(_lib.skmetal_linear_solve, XTX, XTy, coef, XTX.shape[0])
 
 
 def fista_fit(X: np.ndarray, y: np.ndarray, alpha: float, l1_ratio: float = 1.0,
