@@ -4,6 +4,7 @@ from .._bridge import scaler_fit
 
 
 class MetalGaussianNB(BaseGPUEstimator):
+    """GPU-accelerated GaussianNB via GPU mean/variance per class."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):

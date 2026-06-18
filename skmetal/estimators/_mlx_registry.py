@@ -54,12 +54,6 @@ MLX_REGISTRY: dict[type, tuple[str, str]] = {
 if _HAS_FLASH_KMEANS:
     MLX_REGISTRY[KMeans] = ("skmetal.estimators._mlx_kmeans", "MetalKMeansMLX")
 
-_MLX_CLASS_NAMES: dict[type, str] = {
-    TruncatedSVD: "MetalTruncatedSVDMLX",
-}
-if _HAS_FLASH_KMEANS:
-    _MLX_CLASS_NAMES[KMeans] = "MetalKMeansMLX"
-
 __all__ = [
     "has_mlx",
     "has_flash_kmeans",

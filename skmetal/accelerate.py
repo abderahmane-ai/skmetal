@@ -1,8 +1,11 @@
 """@accelerate decorator for enabling GPU acceleration."""
 
+from __future__ import annotations
+
 import threading
 import warnings
 from functools import wraps
+from typing import Any
 from sklearn.pipeline import Pipeline
 from ._dispatch import _wrap_estimator, _wrap_pipeline
 from ._config import _get_device, _set_thread_device
@@ -11,7 +14,7 @@ from ._config import _get_device, _set_thread_device
 _local = threading.local()
 
 
-def accelerate(obj=None):
+def accelerate(obj: Any | None = None) -> Any:
     """
     Enable GPU acceleration for scikit-learn estimators.
 
@@ -38,7 +41,7 @@ class _Accelerator:
     """Internal helper for @accelerate without arguments."""
 
     @staticmethod
-    def _wrap_class(cls):
+    def _wrap_class(cls: type) -> type:
         """Wrap a class so its instances are accelerated."""
         orig_new = cls.__new__
         orig_init = cls.__init__
@@ -63,7 +66,7 @@ class _Accelerator:
         cls.__init__ = new_init
         return cls
 
-    def __call__(self, obj):
+    def __call__(self, obj: Any) -> Any:
         if isinstance(obj, Pipeline):
             return _wrap_pipeline(obj)
         if isinstance(obj, type):

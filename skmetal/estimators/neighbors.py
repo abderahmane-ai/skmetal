@@ -58,12 +58,14 @@ class MetalKNeighborsMixin:
 
 
 class MetalNearestNeighbors(MetalKNeighborsMixin, BaseGPUEstimator):
+    """GPU-accelerated NearestNeighbors via tiled pairwise distance + merge on GPU."""
     def fit(self, X, y=None, **kwargs):
         X, _ = self._validate_data(X, y)
         return self._fit_knn(X, y)
 
 
 class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
+    """GPU-accelerated KNeighborsClassifier via tiled top-k + fused voting (weighted or uniform)."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         return self._fit_knn(X, y)
@@ -126,6 +128,7 @@ class MetalKNeighborsClassifier(MetalKNeighborsMixin, BaseGPUEstimator):
 
 
 class MetalKNeighborsRegressor(MetalKNeighborsMixin, BaseGPUEstimator):
+    """GPU-accelerated KNeighborsRegressor via tiled top-k + fused averaging (weighted or uniform)."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         return self._fit_knn(X, y)

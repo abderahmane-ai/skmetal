@@ -10,7 +10,7 @@ import threading
 import skmetal
 from skmetal._bridge import METAL_AVAILABLE
 from skmetal._dispatch import _wrap_estimator, _wrap_pipeline, _is_supported
-from skmetal.estimators._registry import GPU_REGISTRY, GPU_ESTIMATORS
+from skmetal.estimators._registry import GPU_REGISTRY
 
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
@@ -34,7 +34,7 @@ def test_metal_available_exported():
 
 def test_all_registered_estimators_are_supported():
     """Every estimator in the registry should be detected as supported."""
-    for sklearn_cls in GPU_ESTIMATORS:
+    for sklearn_cls in GPU_REGISTRY:
         assert _is_supported(sklearn_cls())
 
 

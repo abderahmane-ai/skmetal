@@ -28,42 +28,42 @@ jobs:
     - name: Cache Swift build artifacts
       uses: actions/cache@v4
       with:
-        path: skmetal/skmetal_bridge/.build
-        key: swift-build-${{ runner.os }}-${{ hashFiles('skmetal/skmetal_bridge/Sources/**/*.swift', 'skmetal/skmetal_bridge/Sources/**/*.metal') }}
+        path: skmetal_bridge/.build
+        key: swift-build-${{ runner.os }}-${{ hashFiles('skmetal_bridge/Sources/**/*.swift', 'skmetal_bridge/Sources/**/*.metal') }}
         restore-keys: |
           swift-build-${{ runner.os }}-
 
     - name: Compile Metal kernels
       run: |
-        cd skmetal/skmetal_bridge
+        cd skmetal_bridge
         bash compile_metal.sh
 
     - name: Build Swift Bridge
       run: |
-        cd skmetal/skmetal_bridge
+        cd skmetal_bridge
         swift build --configuration release
 
     - name: Copy artifacts into Python package
       run: |
-        DYLIB="skmetal/skmetal_bridge/.build/arm64-apple-macosx/release/libSkMetalBridge.dylib"
+        DYLIB="skmetal_bridge/.build/arm64-apple-macosx/release/libSkMetalBridge.dylib"
         if [ ! -f "$DYLIB" ]; then
-          DYLIB="skmetal/skmetal_bridge/.build/release/libSkMetalBridge.dylib"
+          DYLIB="skmetal_bridge/.build/release/libSkMetalBridge.dylib"
         fi
-        cp "$DYLIB" skmetal/skmetal/libSkMetalBridge.dylib
-        BUNDLE="skmetal/skmetal_bridge/.build/arm64-apple-macosx/release/SkMetalBridge_SkMetalBridge.bundle"
+        cp "$DYLIB" skmetal/libSkMetalBridge.dylib
+        BUNDLE="skmetal_bridge/.build/arm64-apple-macosx/release/SkMetalBridge_SkMetalBridge.bundle"
         if [ -d "$BUNDLE" ]; then
-          cp -R "$BUNDLE" skmetal/skmetal/SkMetalBridge_SkMetalBridge.bundle
+          cp -R "$BUNDLE" skmetal/SkMetalBridge_SkMetalBridge.bundle
         fi
 
     - name: Install Python package
       run: |
-        pip install -e "skmetal[dev]"
+        pip install -e ".[dev]"
 
     - name: Lint with ruff
       run: |
         pip install ruff
-        ruff check skmetal/skmetal/ tests/
-        ruff format --check skmetal/skmetal/ tests/
+        ruff check skmetal/ tests/
+        ruff format --check skmetal/ tests/
 
     - name: Run all tests with coverage
       run: |

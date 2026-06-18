@@ -304,7 +304,7 @@ public func skmetal_fista_fit(
 
         for batchIt in globalIt..<batchEnd {
 
-            let blit1 = cb.makeBlitCommandEncoder()!
+            guard let blit1 = cb.makeBlitCommandEncoder() else { return 1 }
             blit1.copy(from: xBuf_g, sourceOffset: 0, to: xPrevBuf, destinationOffset: 0, size: pBufSize)
             blit1.endEncoding()
 
@@ -325,7 +325,7 @@ public func skmetal_fista_fit(
             encGradSub.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
             encGradSub.endEncoding()
 
-            let blit2 = cb.makeBlitCommandEncoder()!
+            guard let blit2 = cb.makeBlitCommandEncoder() else { return 1 }
             blit2.copy(from: zBuf, sourceOffset: 0, to: xTempBuf, destinationOffset: 0, size: pBufSize)
             blit2.endEncoding()
 
@@ -377,7 +377,7 @@ public func skmetal_fista_fit(
             encSub.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
             encSub.endEncoding()
 
-            let blit3 = cb.makeBlitCommandEncoder()!
+            guard let blit3 = cb.makeBlitCommandEncoder() else { return 1 }
             blit3.copy(from: xBuf_g, sourceOffset: 0, to: zBuf, destinationOffset: 0, size: pBufSize)
             blit3.endEncoding()
 
@@ -392,7 +392,7 @@ public func skmetal_fista_fit(
             encZUp.dispatchThreadgroups(grd256, threadsPerThreadgroup: tg256)
             encZUp.endEncoding()
 
-            let snapBlit = cb.makeBlitCommandEncoder()!
+            guard let snapBlit = cb.makeBlitCommandEncoder() else { return 1 }
             snapBlit.copy(from: xBuf_g, sourceOffset: 0,
                           to: snapBuf, destinationOffset: batchIt * pBufSize,
                           size: pBufSize)

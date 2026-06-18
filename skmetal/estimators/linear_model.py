@@ -28,6 +28,7 @@ class _BaseMetalLinear(BaseGPUEstimator):
 
 
 class MetalLinearRegression(_BaseMetalLinear):
+    """GPU-accelerated LinearRegression via normal equations (MPS GEMM + Cholesky)."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
@@ -47,6 +48,7 @@ class MetalLinearRegression(_BaseMetalLinear):
 
 
 class MetalRidge(_BaseMetalLinear):
+    """GPU-accelerated Ridge via MPS GEMM + Cholesky solve with L2 penalty."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
@@ -86,6 +88,7 @@ class _BaseMetalFista(_BaseMetalLinear):
 
 
 class MetalLasso(_BaseMetalFista):
+    """GPU-accelerated Lasso via FISTA with GPU residual updates (l1_ratio=1.0)."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
@@ -94,6 +97,7 @@ class MetalLasso(_BaseMetalFista):
 
 
 class MetalElasticNet(_BaseMetalFista):
+    """GPU-accelerated ElasticNet via FISTA with GPU residual updates (l1_ratio configurable)."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
@@ -102,6 +106,7 @@ class MetalElasticNet(_BaseMetalFista):
 
 
 class MetalLogisticRegression(BaseGPUEstimator):
+    """GPU-accelerated LogisticRegression via IRLS/L-BFGS in Swift/Metal."""
     def fit(self, X, y, **kwargs):
         # Pop solver kwarg before passing through to fallback
         solver = kwargs.pop("solver", "irls")

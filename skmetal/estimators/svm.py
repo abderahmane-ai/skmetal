@@ -74,6 +74,7 @@ class _BaseMetalSVM(BaseGPUEstimator):
 
 
 class MetalSVC(_BaseMetalSVM):
+    """GPU-accelerated SVC via RBF kernel on GPU + precomputed kernel fit/predict."""
     def _should_use_gpu(self, X):
         if not super()._should_use_gpu(X):
             return False
@@ -122,6 +123,7 @@ class MetalSVC(_BaseMetalSVM):
 
 
 class MetalSVR(_BaseMetalSVM):
+    """GPU-accelerated SVR via RBF kernel on GPU + precomputed kernel fit/predict."""
     def _should_use_gpu(self, X):
         if not super()._should_use_gpu(X):
             return False

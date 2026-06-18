@@ -4,6 +4,7 @@ from .._bridge import scaler_fit, column_minmax, column_transform, minmax_transf
 
 
 class MetalStandardScaler(BaseGPUEstimator):
+    """GPU-accelerated StandardScaler via fused Welford mean/variance (1 dispatch)."""
     def fit(self, X, y=None, **kwargs):
         X, _ = self._validate_data(X, y)
         if not self._should_use_gpu(X):
@@ -35,6 +36,7 @@ class MetalStandardScaler(BaseGPUEstimator):
 
 
 class MetalMinMaxScaler(BaseGPUEstimator):
+    """GPU-accelerated MinMaxScaler via threadgroup tree reduction for column min/max."""
     def fit(self, X, y=None, **kwargs):
         X, _ = self._validate_data(X, y)
         if not self._should_use_gpu(X):
@@ -70,6 +72,7 @@ class MetalMinMaxScaler(BaseGPUEstimator):
 
 
 class MetalRobustScaler(BaseGPUEstimator):
+    """GPU-accelerated RobustScaler via GPU quantile approximation."""
     def fit(self, X, y=None, **kwargs):
         X, _ = self._validate_data(X, y)
         if not self._should_use_gpu(X):

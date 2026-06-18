@@ -45,8 +45,8 @@ def _find_library() -> str:
             return str(p.resolve())
     raise RuntimeError(
         "SkMetalBridge dylib not found. Build the Swift package first:\n"
-        "  cd skmetal_bridge && swift build --configuration release\n"
-        "Then copy the dylib to ~/.local/lib/ or run: cd skmetal_bridge && bash compile_metal.sh && swift build --configuration release"
+        "  cd skmetal_bridge && bash compile_metal.sh && swift build --configuration release\n"
+        "Or run from repo root:  bash build.sh"
     )
 
 
@@ -496,7 +496,7 @@ def _gemm_f16_mlx(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     return np.array(C_mx, dtype=np.float32)
 
 
-def gemm(A: np.ndarray, B: np.ndarray, alpha=1.0, beta=0.0, trans_A=False, trans_B=False) -> np.ndarray:
+def gemm(A: np.ndarray, B: np.ndarray, alpha: float = 1.0, beta: float = 0.0, trans_A: bool = False, trans_B: bool = False) -> np.ndarray:
     """C = alpha * op(A) @ op(B) + beta * C (zero-copy).
 
     Routing priority:
@@ -588,7 +588,17 @@ def column_minmax(X: np.ndarray, min_out: np.ndarray, max_out: np.ndarray) -> No
     _bridge_call(_lib.skmetal_column_minmax, X, min_out, max_out, X.shape[0], X.shape[1])
 
 
-def kmeans_batch_fused(X, centroids, assignments, n, d, k, num_groups, max_iter, tol):
+def kmeans_batch_fused(
+    X: np.ndarray,
+    centroids: np.ndarray,
+    assignments: np.ndarray,
+    n: int,
+    d: int,
+    k: int,
+    num_groups: int,
+    max_iter: int,
+    tol: float,
+) -> int:
     """KMeans iterations with GPU-side convergence detection."""
     n_iter_out = ctypes.c_int32(0)
     _bridge_call(

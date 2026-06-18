@@ -16,6 +16,7 @@ from .._config import get_config
 
 
 class MetalKMeans(BaseGPUEstimator):
+    """GPU-accelerated KMeans via fused command buffer (Lloyd iterations on GPU)."""
     def fit(self, X, y=None, **kwargs):
         X, _ = self._validate_data(X, y)
         if not self._should_use_gpu(X):
@@ -146,6 +147,7 @@ class MetalKMeans(BaseGPUEstimator):
 
 
 class MetalDBSCAN(BaseGPUEstimator):
+    """GPU-accelerated DBSCAN via Shiloach-Vishkin connected components on GPU."""
     def _should_use_gpu(self, X):
         if not super()._should_use_gpu(X):
             return False

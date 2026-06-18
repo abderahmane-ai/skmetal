@@ -124,6 +124,7 @@ class MetalHistGradientBoostingBase(BaseGPUEstimator):
 
 
 class MetalHistGradientBoostingRegressor(MetalHistGradientBoostingBase):
+    """GPU-accelerated HGBT regression via Metal shader tree traversal predict. Training on CPU."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):
@@ -132,6 +133,7 @@ class MetalHistGradientBoostingRegressor(MetalHistGradientBoostingBase):
 
 
 class MetalHistGradientBoostingClassifier(MetalHistGradientBoostingBase):
+    """GPU-accelerated HGBT classification via Metal shader tree traversal predict. Training on CPU."""
     def fit(self, X, y, **kwargs):
         X, y = self._validate_data(X, y)
         if not self._should_use_gpu(X):

@@ -174,14 +174,14 @@ public func skmetal_logreg_irls_fit(
             solve.encode(commandBuffer: cb, sourceMatrix: matrixH, rightHandSideMatrix: matrixG, solutionMatrix: matrixD)
 
             // Snapshot current w (pre-update) for convergence retrieval
-            let snapBlit = cb.makeBlitCommandEncoder()!
+            guard let snapBlit = cb.makeBlitCommandEncoder() else { return 1 }
             snapBlit.copy(from: wBuffer, sourceOffset: 0,
                           to: snapBuf, destinationOffset: it * pSize,
                           size: pSize)
             snapBlit.endEncoding()
 
             // Snapshot Cholesky status
-            let statusBlit = cb.makeBlitCommandEncoder()!
+            guard let statusBlit = cb.makeBlitCommandEncoder() else { return 1 }
             statusBlit.copy(from: statusBuffer, sourceOffset: 0,
                             to: statusSnapBuf, destinationOffset: it * MemoryLayout<Int32>.stride,
                             size: MemoryLayout<Int32>.stride)
@@ -563,7 +563,7 @@ public func skmetal_logreg_lbfgs_fit(
 
         guard let lsCB = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         for t in 0..<nTrials {
-            let copyBlit = lsCB.makeBlitCommandEncoder()!
+            guard let copyBlit = lsCB.makeBlitCommandEncoder() else { return 1 }
             copyBlit.copy(from: trialWbuf, sourceOffset: t * pSize,
                           to: wBuffer, destinationOffset: 0,
                           size: pSize)
@@ -1000,7 +1000,7 @@ public func skmetal_multinomial_lbfgs_fit(
 
         guard let trialCB = ctx.commandQueue.makeCommandBuffer() else { return 1 }
         for t in 0..<maxTrialSteps {
-            let blit = trialCB.makeBlitCommandEncoder()!
+            guard let blit = trialCB.makeBlitCommandEncoder() else { return 1 }
             blit.copy(from: trialWBuffer!, sourceOffset: t * totalParams * fs,
                       to: wBuffer, destinationOffset: 0, size: totalParams * fs)
             blit.endEncoding()

@@ -4,10 +4,10 @@ set -euo pipefail
 # Build the Swift Metal bridge library and install it where Python can find it.
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-cd "$REPO_ROOT/skmetal/skmetal_bridge"
+cd "$REPO_ROOT/skmetal_bridge"
 
 echo "==> Compiling Metal kernels..."
-"$REPO_ROOT/skmetal/skmetal_bridge/compile_metal.sh"
+"$REPO_ROOT/skmetal_bridge/compile_metal.sh"
 
 echo "==> Building SkMetalBridge (release)..."
 swift build --configuration release
@@ -23,10 +23,19 @@ if [ ! -f "$DYLIB" ]; then
     exit 1
 fi
 
-# Install to ~/.local/lib/ so the installed package can find it
+# Copy dylib into the skmetal Python package (zero-copy: sits next to _bridge.py)
+cp "$DYLIB" "$REPO_ROOT/skmetal/libSkMetalBridge.dylib"
+
+# Copy the compiled Metal bundle
+BUNDLE=".build/arm64-apple-macosx/release/SkMetalBridge_SkMetalBridge.bundle"
+if [ -d "$BUNDLE" ]; then
+    cp -R "$BUNDLE" "$REPO_ROOT/skmetal/SkMetalBridge_SkMetalBridge.bundle"
+fi
+
+# Also install to ~/.local/lib/ for pip-installed wheels
 INSTALL_DIR="$HOME/.local/lib"
 mkdir -p "$INSTALL_DIR"
 cp "$DYLIB" "$INSTALL_DIR/libSkMetalBridge.dylib"
-echo "==> Installed dylib to $INSTALL_DIR/libSkMetalBridge.dylib"
 
-echo "==> Done. You can now 'pip install -e .' or 'import skmetal'."
+echo "==> Installed dylib to skmetal/libSkMetalBridge.dylib and $INSTALL_DIR/libSkMetalBridge.dylib"
+echo "==> Done. You can now run: pip install -e . && cd skmetal && python3 -m pytest ../tests/"

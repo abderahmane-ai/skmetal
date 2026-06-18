@@ -32,6 +32,26 @@ PER_ESTIMATOR_THRESHOLDS: dict[str, tuple[int, int]] = {
 
 
 class Config:
+    """Global configuration for skmetal GPU dispatch.
+
+    Thread-safe via ``threading.Lock``. Holds device preference, global
+    dispatch threshold, compute dtype, verbosity flag, and per-estimator
+    (min_rows, min_cols) overrides.
+
+    Attributes
+    ----------
+    device : str
+        ``"gpu"`` (Metal), ``"cpu"`` (sklearn fallback), or ``"auto"``.
+    threshold : int
+        Minimum ``n_samples * n_features`` for GPU dispatch.
+    dtype : str
+        Compute dtype. Only ``"float32"`` is supported (Apple GPU lacks float64).
+    verbose : bool
+        When True, log GPU/CPU dispatch decisions to stderr.
+    thresholds : dict
+        Per-estimator overrides mapping class name → (min_rows, min_cols).
+    """
+
     def __init__(
         self,
         device: str = "gpu",
@@ -74,6 +94,12 @@ _UNSET = object()
 
 
 def get_config() -> Config:
+    """Return the current thread-local configuration.
+
+    Returns a ``Config`` instance. Use ``config.device`` to read the
+    device setting for the current thread (may differ from the global
+    default when inside an ``accelerate_context`` block).
+    """
     return _config
 
 
@@ -97,6 +123,15 @@ def _set_thread_device(device: str | None) -> None:
 
 
 def set_device(device: str) -> None:
+    """Set the global GPU device preference.
+
+    ``"gpu"`` routes estimators to Metal (default).
+    ``"cpu"`` forces every estimator to use scikit-learn CPU.
+    ``"auto"`` uses per-estimator thresholds to decide.
+
+    Per-thread override via ``accelerate_context(enabled=False)`` takes
+    precedence over this global setting.
+    """
     with _lock:
         if device not in ("gpu", "cpu", "auto"):
             raise ValueError("device must be 'gpu', 'cpu', or 'auto'")
@@ -107,11 +142,20 @@ def set_device(device: str) -> None:
 
 
 def set_threshold(threshold: int) -> None:
+    """Set the global minimum ``n * d`` for GPU dispatch.
+
+    Estimators whose input has fewer than *threshold* elements fall back
+    to CPU.  Larger values keep more computation on the CPU.
+    """
     with _lock:
         _config.threshold = int(threshold)
 
 
 def set_dtype(dtype: str) -> None:
+    """Set the compute dtype for GPU operations.
+
+    Only ``"float32"`` is supported — Apple GPUs lack native float64.
+    """
     with _lock:
         if dtype != "float32":
             raise ValueError("Only float32 is supported for GPU operations.")
@@ -119,16 +163,31 @@ def set_dtype(dtype: str) -> None:
 
 
 def set_verbose(verbose: bool) -> None:
+    """Enable or disable dispatch-decision logging.
+
+    When True, every GPU/CPU routing decision prints to stderr, showing
+    which estimator was wrapped and why GPU was or was not selected.
+    """
     with _lock:
         _config.verbose = bool(verbose)
 
 
 def set_thresholds(thresholds: dict) -> None:
+    """Replace all per-estimator thresholds at once.
+
+    *thresholds* maps estimator class name → ``(min_rows, min_cols)``.
+    ``reset_thresholds()`` restores the built-in defaults.
+    """
     with _lock:
         _config.thresholds = dict(thresholds)
 
 
 def update_threshold(name: str, min_rows: int, min_cols: int) -> None:
+    """Override the threshold for a single estimator.
+
+    *name* is the sklearn class name (e.g. ``"LinearRegression"``).
+    GPU dispatch is skipped unless ``n >= min_rows`` and ``d >= min_cols``.
+    """
     with _lock:
         _config.thresholds[name] = (min_rows, min_cols)
 

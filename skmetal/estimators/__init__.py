@@ -1,7 +1,7 @@
 """GPU-accelerated estimators for scikit-learn."""
 
 from ._base import BaseGPUEstimator  # noqa: F401
-from ._registry import GPU_REGISTRY, GPU_ESTIMATORS  # noqa: F401
+from ._registry import GPU_REGISTRY  # noqa: F401
 from .linear_model import MetalLinearRegression, MetalRidge, MetalLogisticRegression, MetalLasso, MetalElasticNet  # noqa: F401,E501
 from .cluster import MetalKMeans, MetalDBSCAN  # noqa: F401
 from .naive_bayes import MetalGaussianNB  # noqa: F401
@@ -30,7 +30,6 @@ except ImportError:
 __all__ = [
     "BaseGPUEstimator",
     "GPU_REGISTRY",
-    "GPU_ESTIMATORS",
     "MetalLinearRegression",
     "MetalRidge",
     "MetalLogisticRegression",

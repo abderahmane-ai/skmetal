@@ -48,6 +48,3 @@ if _HAS_MLX:
     GPU_REGISTRY[TruncatedSVD] = ("skmetal.estimators._mlx_svd", "MetalTruncatedSVDMLX")
 if _HAS_FLASH_KMEANS:
     GPU_REGISTRY[KMeans] = ("skmetal.estimators._mlx_kmeans", "MetalKMeansMLX")
-
-# Derived map: sklearn class -> GPU class name. Computed from GPU_REGISTRY.
-GPU_ESTIMATORS: dict[type, str] = {cls: name for cls, (_, name) in GPU_REGISTRY.items()}

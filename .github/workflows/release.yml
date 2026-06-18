@@ -28,30 +28,29 @@ jobs:
 
       - name: Compile Metal kernels
         run: |
-          cd skmetal/skmetal_bridge
+          cd skmetal_bridge
           bash compile_metal.sh
 
       - name: Build Swift Bridge
         run: |
-          cd skmetal/skmetal_bridge
+          cd skmetal_bridge
           swift build --configuration release
 
       - name: Copy artifacts into Python package
         run: |
-          DYLIB="skmetal/skmetal_bridge/.build/arm64-apple-macosx/release/libSkMetalBridge.dylib"
+          DYLIB="skmetal_bridge/.build/arm64-apple-macosx/release/libSkMetalBridge.dylib"
           if [ ! -f "$DYLIB" ]; then
-            DYLIB="skmetal/skmetal_bridge/.build/release/libSkMetalBridge.dylib"
+            DYLIB="skmetal_bridge/.build/release/libSkMetalBridge.dylib"
           fi
-          cp "$DYLIB" skmetal/skmetal/libSkMetalBridge.dylib
-          BUNDLE="skmetal/skmetal_bridge/.build/arm64-apple-macosx/release/SkMetalBridge_SkMetalBridge.bundle"
+          cp "$DYLIB" skmetal/libSkMetalBridge.dylib
+          BUNDLE="skmetal_bridge/.build/arm64-apple-macosx/release/SkMetalBridge_SkMetalBridge.bundle"
           if [ -d "$BUNDLE" ]; then
-            cp -R "$BUNDLE" skmetal/skmetal/SkMetalBridge_SkMetalBridge.bundle
+            cp -R "$BUNDLE" skmetal/SkMetalBridge_SkMetalBridge.bundle
           fi
 
       - name: Build wheel
         run: |
           pip install build
-          cd skmetal
           python -m build --wheel --outdir dist/
 
       # Upload wheels with a consistent name pattern so the publish job can
@@ -60,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: skmetal-wheel
-          path: skmetal/dist/*.whl
+          path: dist/*.whl
 
   publish:
     needs: build
@@ -91,12 +90,11 @@ jobs:
           name: skmetal-wheel
           path: dist/
 
-      # Build sdist from the Python package source (no Swift build needed).
+      # Build sdist from the repository root (single pyproject.toml).
       - name: Build sdist
         run: |
           pip install build
-          cd skmetal
-          python -m build --sdist --outdir ../dist/
+          python -m build --sdist --outdir dist/
 
       - name: List dist contents (debug)
         run: ls -lh dist/

@@ -11,7 +11,6 @@ from skmetal.estimators._mlx_registry import (
     mlx_version,
     mlx_capabilities,
     MLX_REGISTRY,
-    _MLX_CLASS_NAMES,
 )
 
 
@@ -54,15 +53,10 @@ class TestMLXRegistry:
             assert mod.startswith("skmetal.estimators._mlx"), f"Bad module: {mod}"
 
     def test_class_names_have_mlx_suffix(self):
-        for cls, name in _MLX_CLASS_NAMES.items():
+        for cls, (mod, name) in MLX_REGISTRY.items():
             assert name.startswith("Metal"), f"Missing Metal prefix: {name}"
             assert name.endswith("MLX"), f"Missing MLX suffix: {name}"
 
     def test_registry_no_duplicate_class_names(self):
-        names = list(_MLX_CLASS_NAMES.values())
+        names = [name for mod, name in MLX_REGISTRY.values()]
         assert len(names) == len(set(names)), "Duplicate class names in registry"
-
-    def test_class_names_match_registry(self):
-        for cls, name in _MLX_CLASS_NAMES.items():
-            assert cls in MLX_REGISTRY, f"{cls} in _MLX_CLASS_NAMES but not MLX_REGISTRY"
-            assert MLX_REGISTRY[cls][1] == name, f"Class name mismatch for {cls}"
