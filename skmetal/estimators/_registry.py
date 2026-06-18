@@ -5,7 +5,7 @@ Each entry maps an sklearn class to a (module_path, class_name) tuple.
 """
 
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression, Lasso, ElasticNet
-from sklearn.decomposition import TruncatedSVD
+from sklearn.decomposition import TruncatedSVD, PCA
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
@@ -27,6 +27,7 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
     Lasso: ("skmetal.estimators.linear_model", "MetalLasso"),
     ElasticNet: ("skmetal.estimators.linear_model", "MetalElasticNet"),
     TruncatedSVD: ("skmetal.estimators.decomposition", "MetalTruncatedSVD"),
+    PCA: ("skmetal.estimators.decomposition", "MetalPCA"),
     DBSCAN: ("skmetal.estimators.cluster", "MetalDBSCAN"),
     GaussianNB: ("skmetal.estimators.naive_bayes", "MetalGaussianNB"),
     StandardScaler: ("skmetal.estimators.preprocessing", "MetalStandardScaler"),

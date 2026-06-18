@@ -8,7 +8,7 @@ from .naive_bayes import MetalGaussianNB  # noqa: F401
 from .preprocessing import MetalStandardScaler, MetalMinMaxScaler, MetalRobustScaler  # noqa: F401
 from .neighbors import MetalKNeighborsClassifier, MetalKNeighborsRegressor, MetalNearestNeighbors  # noqa: F401,E501
 from .ensemble import MetalHistGradientBoostingRegressor, MetalHistGradientBoostingClassifier  # noqa: F401,E501
-from .decomposition import MetalTruncatedSVD  # noqa: F401
+from .decomposition import MetalTruncatedSVD, MetalPCA  # noqa: F401
 from .svm import MetalSVC, MetalSVR  # noqa: F401
 
 try:
@@ -49,6 +49,7 @@ __all__ = [
     "MetalSVC",
     "MetalSVR",
     "MetalTruncatedSVD",
+    "MetalPCA",
 ]
 
 if _HAS_MLX_SVD:

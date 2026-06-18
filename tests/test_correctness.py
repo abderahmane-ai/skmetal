@@ -5,7 +5,7 @@ import pytest
 from sklearn.datasets import make_classification, make_regression, make_blobs
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression, Lasso, ElasticNet
 from sklearn.ensemble import HistGradientBoostingRegressor, HistGradientBoostingClassifier
-from sklearn.decomposition import TruncatedSVD
+from sklearn.decomposition import TruncatedSVD, PCA
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
@@ -58,6 +58,7 @@ def _match_clusters(gpu_centers, cpu_centers):
 ESTIMATOR_TOL = {
     LogisticRegression: 0.5,
     TruncatedSVD: 0.5,  # randomized SVD uses different random seeds
+    PCA: 0.5,  # randomized SVD (same as TruncatedSVD)
     SVC: 0.5,  # GPU SVC uses different solver path
     SVR: 0.5,
 }
@@ -81,7 +82,7 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
         if isinstance(gpu_val, np.ndarray) and isinstance(cpu_val, np.ndarray):
             if attr == "cluster_centers_":
                 gpu_val = _match_clusters(gpu_val, cpu_val)
-            if estimator_cls is TruncatedSVD and attr in ("components_",):
+            if estimator_cls in (TruncatedSVD, PCA) and attr in ("components_",):
                 # Randomized SVD: check subspace alignment, not component equality
                 continue
             np.testing.assert_allclose(gpu_val, cpu_val, rtol=rtol, atol=atol)
@@ -101,6 +102,7 @@ def _check_attrs(gpu_obj, cpu_obj, estimator_cls=None):
             True,
         ),
         (TruncatedSVD, lambda: make_regression(n_samples=2000, n_features=100, random_state=42), False),
+        (PCA, lambda: make_regression(n_samples=2000, n_features=100, random_state=42), False),
         (KMeans, lambda: make_blobs(n_samples=2000, centers=10, n_features=50, random_state=42), False),
         (StandardScaler, lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
         (MinMaxScaler, lambda: make_regression(n_samples=2000, n_features=50, random_state=42), False),
@@ -180,12 +182,12 @@ def test_estimator_correctness(EstimatorCls, data_fn, has_y):
             err_cpu = np.mean((cpu_pred - y) ** 2)
             assert err_gpu <= err_cpu * 1.5  # GPU MSE within 50% of CPU
 
-    # For TruncatedSVD: verify subspace quality via reconstruction error
-    if EstimatorCls is TruncatedSVD:
+    # For TruncatedSVD and PCA: verify subspace quality via reconstruction error
+    if EstimatorCls in (TruncatedSVD, PCA):
         X_proj = gpu_model.transform(X)
-        X_recon = X_proj @ gpu_obj.components_
+        X_recon = gpu_model.inverse_transform(X_proj)
         cpu_proj = cpu_model.transform(X)
-        cpu_recon = cpu_proj @ cpu_model.components_
+        cpu_recon = cpu_model.inverse_transform(cpu_proj)
         gpu_err = np.linalg.norm(X - X_recon)
         cpu_err = np.linalg.norm(X - cpu_recon)
         assert gpu_err <= cpu_err * 1.1  # GPU reconstruction ≤ 110% of CPU

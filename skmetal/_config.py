@@ -8,6 +8,7 @@ PER_ESTIMATOR_THRESHOLDS: dict[str, tuple[int, int]] = {
     "StandardScaler": (1_000, 10),  # 9.5× GPU (1M×100)
     "LinearRegression": (50_000, 50),  # 10.0× GPU (200K×500)
     "TruncatedSVD": (5_000, 20),  # 3.1× GPU (100K×500)
+    "PCA": (5_000, 10),  # GPU randomized SVD (centering on CPU, GEMM on GPU)
     "ElasticNet": (50_000, 50),  # 1.53× GPU (100K×200)
     "Lasso": (50_000, 50),  # 1.40× GPU (100K×200)
     "LogisticRegression": (500_000, 500),  # 0.92× tied; likely wins for p>500
