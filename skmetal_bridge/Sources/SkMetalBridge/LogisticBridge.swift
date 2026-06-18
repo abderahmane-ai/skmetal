@@ -1097,3 +1097,79 @@ public func skmetal_multinomial_lbfgs_fit(
 }
 
 
+// MARK: - Fused L-BFGS gradient + loss kernel for binary LogisticRegression
+
+@_cdecl("skmetal_lbfgs_grad_loss_fused")
+public func skmetal_lbfgs_grad_loss_fused(
+    X: UnsafeRawPointer,
+    w: UnsafeRawPointer,
+    y: UnsafeRawPointer,
+    grad_out: UnsafeMutableRawPointer,
+    loss_partial_out: UnsafeMutableRawPointer,
+    n: Int,
+    p: Int,
+    num_groups: Int
+) -> Int32 {
+    let ctx = MetalContext.shared
+    let fs = MemoryLayout<Float>.stride
+    let nSize = n * fs
+    let pSize = p * fs
+    let xSize = n * p * fs
+    let ngSize = num_groups * fs
+
+    guard let xBuffer = wrapInput(X, length: xSize, device: ctx.device),
+          let wBuffer = wrapInput(w, length: pSize, device: ctx.device),
+          let yBuffer = wrapInput(y, length: nSize, device: ctx.device) else {
+        return 1
+    }
+
+    guard let gradBuffer = ctx.device.makeBuffer(bytesNoCopy: grad_out,
+                                                  length: pSize,
+                                                  options: .storageModeShared,
+                                                  deallocator: nil),
+          let lossBuf = ctx.device.makeBuffer(bytesNoCopy: loss_partial_out,
+                                              length: ngSize,
+                                              options: .storageModeShared,
+                                              deallocator: nil) else {
+        return 1
+    }
+
+    // Zero-init the grad output buffer
+    memset(grad_out, 0, pSize)
+
+    guard let pipeline = ctx.getPipeline(name: "lbfgs_grad_loss_binary_fused",
+                                          functionName: "lbfgs_grad_loss_binary_fused") else {
+        return 1
+    }
+
+    guard let cb = ctx.commandQueue.makeCommandBuffer(),
+          let enc = cb.makeComputeCommandEncoder() else {
+        return 1
+    }
+
+    enc.setComputePipelineState(pipeline)
+    enc.setBuffer(xBuffer, offset: 0, index: 0)
+    enc.setBuffer(wBuffer, offset: 0, index: 1)
+    enc.setBuffer(yBuffer, offset: 0, index: 2)
+    enc.setBuffer(gradBuffer, offset: 0, index: 3)
+    enc.setBuffer(lossBuf, offset: 0, index: 4)
+    var nU = UInt32(n)
+    var pU = UInt32(p)
+    enc.setBytes(&nU, length: MemoryLayout<UInt32>.stride, index: 5)
+    enc.setBytes(&pU, length: MemoryLayout<UInt32>.stride, index: 6)
+
+    // Variadic threadgroup memory: grad_tg (p * 4) + w_tg (p * 4)
+    enc.setThreadgroupMemoryLength(p * fs, index: 0)
+    enc.setThreadgroupMemoryLength(p * fs, index: 1)
+
+    // Each threadgroup = 1 SIMD-group = 32 threads
+    let tgSize = MTLSize(width: 32, height: 1, depth: 1)
+    let gridSize = MTLSize(width: num_groups, height: 1, depth: 1)
+    enc.dispatchThreadgroups(gridSize, threadsPerThreadgroup: tgSize)
+    enc.endEncoding()
+
+    cb.commit()
+    cb.waitUntilCompleted()
+
+    return 0
+}

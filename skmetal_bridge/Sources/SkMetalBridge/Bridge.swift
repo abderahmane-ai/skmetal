@@ -86,6 +86,7 @@ public func skmetal_warmup() -> Int32 {
         ("sv_shortcut", "sv_shortcut"),
         ("tree_predict_all", "tree_predict_all"),
         ("compute_linear_irls", "compute_linear_irls"),
+        ("lbfgs_grad_loss_binary_fused", "lbfgs_grad_loss_binary_fused"),
         ("compute_error_scale", "compute_error_scale"),
         ("l2_reg_irls", "l2_reg_irls"),
         ("sigmoid_grad_loss_binary", "sigmoid_grad_loss_binary"),

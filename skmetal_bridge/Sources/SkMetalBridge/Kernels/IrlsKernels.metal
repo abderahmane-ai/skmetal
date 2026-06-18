@@ -148,3 +148,108 @@ kernel void multinomial_grad_l2(
     uint g_idx = c * p + i;
     gradient[g_idx] += alpha * W[i * C + c];
 }
+
+// Fused L-BFGS gradient + loss kernel for binary logistic regression.
+//
+// Replaces 5 dispatches (2 MPS GEMM, sigmoid, axpy, reduce_sum) with 1.
+// X is read exactly once — vs. twice in the old separate GEMM path.
+//
+// Design: cooperative SIMD-group row processing (32 threads per row).
+// - Adjacent lanes → coalesced float4 reads of X.
+// - w in threadgroup memory → broadcast (free).
+// - simd_sum() = dot product in one instruction.
+// - Gradient in threadgroup memory, atomically added at kernel end.
+//
+// Threadgroup memory: 2 × p × 4 bytes (grad_tg + w_tg). For p=1000: 8 KB.
+// Occupancy: 4 concurrent groups/core at p=500, 2 at p=1000.
+//
+// Grid: num_simd_groups × 1 × 1. Each group = 32 threads = 1 threadgroup.
+kernel void lbfgs_grad_loss_binary_fused(
+    device const float* X          [[buffer(0)]],  // (n, p) row-major
+    device const float* w          [[buffer(1)]],  // (p,)
+    device const float* y          [[buffer(2)]],  // (n,)
+    device float* grad_out         [[buffer(3)]],  // (p,) output — zero-init before dispatch
+    device float* loss_partial     [[buffer(4)]],  // (num_groups,) one float per group
+    constant uint& n               [[buffer(5)]],
+    constant uint& p               [[buffer(6)]],
+    uint simd_lane     [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]],
+    uint simd_groups_per_tg [[simdgroups_per_threadgroup]],
+    threadgroup float* grad_tg [[threadgroup(0)]],
+    threadgroup float* w_tg    [[threadgroup(1)]]
+) {
+    uint num_groups = simd_groups_per_tg;
+
+    // ---- Load w into threadgroup memory ----
+    for (uint j = simd_lane; j < p; j += 32) {
+        w_tg[j] = w[j];
+    }
+    // Zero-init partial gradient
+    for (uint j = simd_lane; j < p; j += 32) {
+        grad_tg[j] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // ---- Process rows assigned to this SIMD-group ----
+    uint rows_per_group = (n + num_groups - 1) / num_groups;
+    uint row_start = simd_group_id * rows_per_group;
+    uint row_end = min(row_start + rows_per_group, n);
+
+    if (row_start >= row_end) {
+        if (simd_lane == 0) loss_partial[simd_group_id] = 0.0f;
+        return;
+    }
+
+    float loss_sum = 0.0f;
+
+    for (uint i = row_start; i < row_end; i++) {
+        uint base = i * p;
+
+        // Dot product: coalesced float4 reads + simd_sum
+        float dot = 0.0f;
+        uint j = simd_lane * 4;
+        for (; j + 4 <= p; j += 128) {
+            float4 xv = *reinterpret_cast<device const float4*>(X + base + j);
+            float4 wv = *reinterpret_cast<const threadgroup float4*>(w_tg + j);
+            dot += xv.x * wv.x + xv.y * wv.y + xv.z * wv.z + xv.w * wv.w;
+        }
+        for (; j < p; j += 32) {
+            if (j + simd_lane < p) {
+                dot += X[base + j + simd_lane] * w_tg[j + simd_lane];
+            }
+        }
+
+        float lin = simd_sum(dot);
+
+        // Sigmoid + residual + log loss
+        float z = clamp(lin, -100.0f, 100.0f);
+        float prob = 1.0f / (1.0f + fast::exp(-z));
+        float residual = prob - y[i];
+        float y_adj = 2.0f * y[i] - 1.0f;
+        float t = -y_adj * z;
+        loss_sum += (t > 0.0f) ? (t + log(1.0f + exp(-t))) : log(1.0f + exp(t));
+
+        // Gradient: lane k writes to columns k, k+32, k+64, ...
+        j = simd_lane;
+        for (; j < p; j += 32) {
+            grad_tg[j] += residual * X[base + j];
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // ---- Atomically add threadgroup gradient to global ----
+    for (uint j = simd_lane; j < p; j += 32) {
+        float val = grad_tg[j];
+        if (val != 0.0f) {
+            atomic_fetch_add_explicit(
+                (device atomic_float*)(grad_out + j), val, memory_order_relaxed);
+        }
+    }
+
+    // ---- Reduce loss across SIMD lanes ----
+    float group_loss = simd_sum(loss_sum);
+    if (simd_lane == 0) {
+        loss_partial[simd_group_id] = group_loss;
+    }
+}
