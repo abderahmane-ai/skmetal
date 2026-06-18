@@ -1,11 +1,8 @@
 """Benchmark suite for skmetal GPU acceleration."""
 
-import sys
 import time
 import json
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skmetal"))
 
 import numpy as np
 from sklearn.datasets import make_regression, make_classification, make_blobs
