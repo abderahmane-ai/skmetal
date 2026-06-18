@@ -67,6 +67,18 @@ Measured on an M4 Air (16 GB) and M4 Max (128 GB). All data float32, `n_init=1`,
 
 KMeans MLX requires `pip install skmetal[mlx]`. Without MLX, KMeans falls back to a Metal fused command-buffer (slower than CPU — 0.1×). The MLX path uses [flash-kmeans-mlx](https://github.com/hanxiao/flash-kmeans-mlx) which fuses distance + argmin + update into a single compiled GPU kernel.
 
+### Apple M3 Pro (18 GB)
+
+| Estimator | Data Size | Speedup |
+|-----------|-----------|---------|
+| `LinearRegression` | 200,000 × 500 | **10.42×** |
+| `StandardScaler` | 1,000,000 × 100 | **9.93×** |
+| `TruncatedSVD` | 100,000 × 500 | **4.20×** |
+| `MinMaxScaler` | 1,000,000 × 100 | **1.36×** |
+| `KMeans` | 500,000 × 100 | **1.32×** |
+| `Ridge` | 200,000 × 500 | 0.94× |
+| `LogisticRegression` | 100,000 × 200 | 0.93× |
+
 Run benchmarks locally:
 ```bash
 pip install skmetal[mlx]

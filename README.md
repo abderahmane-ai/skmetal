@@ -72,6 +72,18 @@ pip install -e "skmetal[dev]"
 
 KMeans MLX requires `pip install skmetal[mlx]`.
 
+## Benchmarks (M3 Pro, 18 GB)
+
+| Estimator | Data Size | Speedup |
+|-----------|-----------|---------|
+| `LinearRegression` | 200,000 × 500 | **10.42×** |
+| `StandardScaler` | 1,000,000 × 100 | **9.93×** |
+| `TruncatedSVD` | 100,000 × 500 | **4.20×** |
+| `MinMaxScaler` | 1,000,000 × 100 | **1.36×** |
+| `KMeans` | 500,000 × 100 | **1.32×** |
+| `Ridge` | 200,000 × 500 | 0.94× |
+| `LogisticRegression` | 100,000 × 200 | 0.93× |
+
 See [skmetal/README.md](skmetal/README.md) for the full PyPI readme with architecture, kernel listing, and development guide.
 
 ---
