@@ -64,6 +64,17 @@ except Exception as _metal_err:  # noqa: BLE001
     METAL_AVAILABLE = False
 
 
+_WARMUP_DONE = False
+
+
+def ensure_warmed_up():
+    global _WARMUP_DONE
+    if not _WARMUP_DONE and METAL_AVAILABLE:
+        _lib.skmetal_init()
+        _lib.skmetal_warmup()
+        _WARMUP_DONE = True
+
+
 def _bridge_call(c_func, *args, context=""):
     """Call a C bridge function with auto-conversion of Python/numpy args.
 
@@ -71,6 +82,7 @@ def _bridge_call(c_func, *args, context=""):
     bool → c_int  |  everything else passed through.
     Raises RuntimeError on non-zero return code.
     """
+    ensure_warmed_up()
     c_args = []
     for a in args:
         if isinstance(a, np.ndarray):
@@ -338,7 +350,8 @@ if METAL_AVAILABLE:
 
     # device_info, init, warmup have unique argtypes not in registry
     _lib.skmetal_device_info.argtypes = [
-        ctypes.POINTER(ctypes.c_char_p),
+        ctypes.c_char_p,
+        ctypes.c_int,
         ctypes.POINTER(ctypes.c_size_t),
         ctypes.POINTER(ctypes.c_uint8),
         ctypes.POINTER(ctypes.c_uint64),
@@ -348,9 +361,6 @@ if METAL_AVAILABLE:
     _lib.skmetal_init.restype = ctypes.c_int
     _lib.skmetal_warmup.argtypes = []
     _lib.skmetal_warmup.restype = ctypes.c_int
-
-    _lib.skmetal_init()
-    _lib.skmetal_warmup()
 
 
 # ============================================================
@@ -606,6 +616,7 @@ def compute_mindists(
 
 def kmeans_inertia(X: np.ndarray, centroids: np.ndarray, assignments: np.ndarray, n: int, d: int, k: int) -> float:
     """Total squared distance Σ‖X[i] - centroids[assignments[i]]‖² (GPU)."""
+    ensure_warmed_up()
     _lib.skmetal_kmeans_inertia.argtypes = [
         ctypes.c_void_p,
         ctypes.c_void_p,
@@ -627,6 +638,7 @@ def fista_fit(
     X: np.ndarray, y: np.ndarray, alpha: float, l1_ratio: float = 1.0, tol: float = 1e-4, max_iter: int = 1000
 ) -> tuple[np.ndarray, int]:
     """GPU-resident FISTA for Lasso/ElasticNet."""
+    ensure_warmed_up()
     n, p = X.shape
     coef = np.empty(p, dtype=np.float32, order="C")
     n_iter_out = ctypes.c_int32(0)
@@ -653,19 +665,17 @@ def device_info() -> dict:
         raise RuntimeError(
             "skmetal: Metal is not available on this device. device_info() requires Apple Silicon + macOS 14+."
         )
-    name_ptr = ctypes.c_char_p()
+    name_buf = ctypes.create_string_buffer(256)
     max_threads = ctypes.c_size_t()
     unified = ctypes.c_uint8()
     working_set = ctypes.c_uint64()
     err = _lib.skmetal_device_info(
-        ctypes.byref(name_ptr), ctypes.byref(max_threads), ctypes.byref(unified), ctypes.byref(working_set)
+        name_buf, 256, ctypes.byref(max_threads), ctypes.byref(unified), ctypes.byref(working_set)
     )
     if err != 0:
         raise RuntimeError("skmetal: device_info() failed (Metal driver may be in an invalid state)")
-    # Note: name_ptr is allocated via strdup() in Swift — small one-time leak per call.
-    # This is acceptable since device_info() is typically called once at import time.
     return {
-        "name": name_ptr.value.decode("utf-8") if name_ptr.value else "unknown",
+        "name": name_buf.value.decode("utf-8") if name_buf.value else "unknown",
         "max_threads_per_threadgroup": max_threads.value,
         "has_unified_memory": bool(unified.value),
         "recommended_working_set_size_bytes": working_set.value,
@@ -719,6 +729,7 @@ def knn_tiled_kneighbors(
 
     Supports euclidean (squared L2), manhattan (L1), cosine (1 - cos).
     """
+    ensure_warmed_up()
     metric_map = {"euclidean": 0, "manhattan": 1, "cosine": 2}
     mcode = metric_map.get(metric, 0)
     n_q, d = X_query.shape

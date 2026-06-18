@@ -24,14 +24,23 @@ public func skmetal_init() -> Int32 {
 
 @_cdecl("skmetal_device_info")
 public func skmetal_device_info(
-    name: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    name: UnsafeMutablePointer<CChar>?,
+    nameCapacity: Int,
     maxThreads: UnsafeMutablePointer<Int>?,
     hasUnifiedMemory: UnsafeMutablePointer<UInt8>?,
     recommendedWorkingSetSize: UnsafeMutablePointer<UInt64>?
 ) -> Int32 {
     let ctx = MetalContext.shared
     let dev = ctx.device
-    name.pointee = strdup(dev.name)
+    if let buf = name, nameCapacity > 0 {
+        let devName = dev.name
+        // strlcpy semantics: copies at most nameCapacity-1 + null terminator
+        let copyLen = min(devName.utf8.count, nameCapacity - 1)
+        devName.withCString { src in
+            memcpy(buf, src, copyLen)
+            buf[copyLen] = 0
+        }
+    }
     maxThreads?.pointee = dev.maxThreadsPerThreadgroup.width
     hasUnifiedMemory?.pointee = dev.hasUnifiedMemory ? 1 : 0
     recommendedWorkingSetSize?.pointee = dev.recommendedMaxWorkingSetSize
@@ -56,8 +65,6 @@ public func skmetal_warmup() -> Int32 {
         ("subtract", "subtract"),
         ("axpy", "axpy"),
         ("column_means_and_center", "column_means_and_center"),
-        ("column_means", "column_means"),
-        ("center_columns", "center_columns"),
         ("compute_mindists", "compute_mindists"),
         ("kmeans_assign", "kmeans_assign"),
         ("kmeans_accumulate", "kmeans_accumulate"),

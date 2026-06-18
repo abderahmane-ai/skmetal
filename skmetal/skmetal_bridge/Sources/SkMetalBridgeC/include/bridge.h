@@ -2,13 +2,14 @@
 #define SKMETAL_BRIDGE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 int skmetal_init(void);
-int skmetal_device_info(char** name, size_t* max_threads);
+int skmetal_device_info(char* name, int name_capacity, size_t* max_threads, uint8_t* has_unified_memory, uint64_t* recommended_working_set_size);
 
 int skmetal_gemm(
     const void* A, const void* B, void* C,

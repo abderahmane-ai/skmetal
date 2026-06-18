@@ -30,10 +30,17 @@ def _wrap_estimator(estimator):
     """
     if not _is_supported(estimator):
         if get_config().verbose:
-            warnings.warn(
-                f"No GPU accelerator for {type(estimator).__name__}. Using CPU.",
-                stacklevel=3,
-            )
+            if type(estimator).__name__ == "KMeans":
+                warnings.warn(
+                    "No GPU accelerator for KMeans. For up to 100x faster execution, "
+                    "install the MLX backend: pip install 'skmetal[mlx]'",
+                    stacklevel=3,
+                )
+            else:
+                warnings.warn(
+                    f"No GPU accelerator for {type(estimator).__name__}. Using CPU.",
+                    stacklevel=3,
+                )
         return estimator
 
     GPUImpl = _get_gpu_impl(estimator)

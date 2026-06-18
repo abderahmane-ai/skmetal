@@ -27,7 +27,6 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
     Lasso: ("skmetal.estimators.linear_model", "MetalLasso"),
     ElasticNet: ("skmetal.estimators.linear_model", "MetalElasticNet"),
     TruncatedSVD: ("skmetal.estimators.decomposition", "MetalTruncatedSVD"),
-    KMeans: ("skmetal.estimators.cluster", "MetalKMeans"),
     DBSCAN: ("skmetal.estimators.cluster", "MetalDBSCAN"),
     GaussianNB: ("skmetal.estimators.naive_bayes", "MetalGaussianNB"),
     StandardScaler: ("skmetal.estimators.preprocessing", "MetalStandardScaler"),
@@ -42,7 +41,9 @@ GPU_REGISTRY: dict[type, tuple[str, str]] = {
     SVR: ("skmetal.estimators.svm", "MetalSVR"),
 }
 
-# Merge MLX backends when available
+# Opt-in MLX backends — only registered when they actually accelerate.
+# KMeans without MLX is slower than CPU (0.1×); only register with flash-kmeans.
+# TruncatedSVD MLX path uses GPU SVD via mx.linalg.svd (3× speedup).
 if _HAS_MLX:
     GPU_REGISTRY[TruncatedSVD] = ("skmetal.estimators._mlx_svd", "MetalTruncatedSVDMLX")
 if _HAS_FLASH_KMEANS:
