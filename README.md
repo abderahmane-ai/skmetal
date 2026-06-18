@@ -52,26 +52,25 @@ cd ..
 
 ## Benchmarks
 
-Measured on an M4 Air (16 GB) and M4 Max (128 GB). All data float32, `n_init=1`, `max_iter=30` for KMeans.
+Measured on an M4 Air (16 GB). All data float32. KMeans: `n_init=1`, GPU random init matches k-means++ quality (0.1% inertia delta).
 
 | Estimator | Data Size | CPU | GPU | Speedup | Notes |
 |-----------|-----------|-----|-----|---------|-------|
-| `KMeans` (MLX) | 200,000 × 64, k=500 | 24.4s | 0.8s | **30×** | flash-kmeans-mlx `mx.compile`-d kernel |
-| `KMeans` (MLX) | 100,000 × 128, k=200 | 10.0s | 0.6s | **16×** | 3-10× typical for n_init ≥ 3 |
-| `StandardScaler` | 1,000,000 × 100 | 0.29s | 0.03s | **10×** | Fused Welford (1 dispatch) |
-| `LinearRegression` | 200,000 × 500 | 1.25s | 0.15s | **8.4×** | MPS GEMM + Cholesky solve |
-| `TruncatedSVD` | 100,000 × 500 | 0.27s | 0.09s | **2.9×** | Randomized SVD on GPU |
-| `MinMaxScaler` | 1,000,000 × 100 | 0.04s | 0.04s | **1.2×** | Threadgroup tree reduction |
-| `LogisticRegression` | 100,000 × 200 | 0.03s | 0.03s | 0.9× | Dispatch-limited at this size |
-| `Ridge` | 200,000 × 500 | 0.12s | 0.13s | 0.9× | CPU Accelerate framework wins at all sizes |
+| `LinearRegression` | 200,000 × 500 | 1.15s | 0.12s | **10.0×** | MPS GEMM + Cholesky solve |
+| `StandardScaler` | 1,000,000 × 100 | 0.29s | 0.03s | **9.5×** | Fused Welford (1 dispatch) |
+| `KMeans` (MLX) | 500,000 × 100, k=50 | 3.29s | 0.42s | **7.8×** | flash-kmeans-mlx `mx.compile`-d kernel |
+| `TruncatedSVD` | 100,000 × 500 | 0.27s | 0.09s | **3.1×** | Randomized SVD on GPU |
+| `MinMaxScaler` | 1,000,000 × 100 | 0.04s | 0.03s | **1.6×** | Threadgroup tree reduction |
+| `LogisticRegression` | 100,000 × 200 | 0.03s | 0.03s | 0.9× | CPU Accelerate framework wins at this size |
+| `Ridge` | 200,000 × 500 | 0.11s | 0.12s | 0.9× | CPU Accelerate framework wins at all sizes |
 
-KMeans MLX requires `pip install skmetal[mlx]`. Without MLX, KMeans falls back to a Metal fused command-buffer (slower than CPU — 0.1×). The MLX path uses [flash-kmeans-mlx](https://github.com/hanxiao/flash-kmeans-mlx) which fuses distance + argmin + update into a single compiled GPU kernel.
+KMeans MLX requires `pip install skmetal[mlx]`. The MLX path uses [flash-kmeans-mlx](https://github.com/hanxiao/flash-kmeans-mlx) which fuses distance + argmin + update into a single compiled GPU kernel. GPU random init with 1 run matches sklearn k-means++ quality.
 
 Run benchmarks locally:
 ```bash
 pip install skmetal[mlx]
 python benchmarks/run_compare.py     # moderate data sizes
-python benchmarks/benchmark_suite.py # large data (generates baseline.json)
+python -m benchmarks.benchmark_suite # large data (generates baseline.json)
 ```
 
 ---

@@ -5,9 +5,9 @@ import threading
 
 PER_ESTIMATOR_THRESHOLDS: dict[str, tuple[int, int]] = {
     # --- GPU winners (benchmarked at 200K×500 / 100K×200 / 1M×100) ---
-    "StandardScaler": (1_000, 10),  # 6.05× GPU (1M×100)
-    "LinearRegression": (50_000, 50),  # 8.15× GPU (200K×500)
-    "TruncatedSVD": (5_000, 20),  # 3.59× GPU (100K×500)
+    "StandardScaler": (1_000, 10),  # 9.5× GPU (1M×100)
+    "LinearRegression": (50_000, 50),  # 10.0× GPU (200K×500)
+    "TruncatedSVD": (5_000, 20),  # 3.1× GPU (100K×500)
     "ElasticNet": (50_000, 50),  # 1.53× GPU (100K×200)
     "Lasso": (50_000, 50),  # 1.40× GPU (100K×200)
     "LogisticRegression": (500_000, 500),  # 0.92× tied; likely wins for p>500
@@ -16,7 +16,7 @@ PER_ESTIMATOR_THRESHOLDS: dict[str, tuple[int, int]] = {
     "MinMaxScaler": (500_000, 10),  # 1.11× GPU (1M×100) — marginal, high threshold
     "KNeighborsClassifier": (5_000_000, 10_000),  # 0.62× CPU (100K×200)
     "KNeighborsRegressor": (5_000_000, 10_000),  # 0.62× CPU (same kernel)
-    "KMeans": (10_000, 10),  # 0.67× CPU on Apple GPU; 94-517× via MLX backend (M3 Ultra)
+    "KMeans": (1_000, 10),  # 7.8× GPU via flash-kmeans-mlx (MLX backend); n_init=1 matches k-means++ quality
     # --- Conservative defaults (not benchmarked) ---
     "RobustScaler": (100_000, 10),
     "DBSCAN": (1_000, 2),
